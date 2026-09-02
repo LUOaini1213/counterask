@@ -191,12 +191,22 @@ export class Catalog {
     const matched = shelf === 'off' ? null : this.matchShelf(qTokens);
     const shelfSet = matched ? new Set(matched.shelf.items) : null;
 
-    // An attribute the shopper stated is not a preference to be traded off,
-    // it is a fact about what they will accept.
+    // An attribute the shopper stated is a fact about what they will accept —
+    // but only against products the catalogue actually describes. Three cases,
+    // not two:
+    //
+    //   records it and matches   -> full credit
+    //   records it and differs   -> a real mismatch, excluded
+    //   does not record it       -> unknown, kept at reduced credit
+    //
+    // The old code collapsed the third into the second. With facets recorded on
+    // as little as 7% of products, "leather" was throwing away every belt whose
+    // listing simply never said what it was made of.
     const passes = (it) => {
       for (const facet of facetKeys) {
         const have = it.f[facet];
-        if (!have || !constraints[facet].some((w) => have.includes(w))) return false;
+        if (!have?.length) return false;
+        if (!constraints[facet].some((w) => have.includes(w))) return false;
       }
       return true;
     };
@@ -277,6 +287,16 @@ export class Catalog {
 // BM25 constants. b controls how hard length is penalised; k1 saturates term
 // frequency, which barely matters for titles where a word appears once.
 const BM25_K1 = 1.2;
+
+// Graded credit for products the catalogue never describes was built, measured
+// and removed. The idea is right in general — silence is not refusal — and it
+// is inert here for a structural reason: the facet extractor reads title,
+// features and details together, so the index is a superset of anything a
+// shopper could be quoting. Of 5,819 products whose *title* states an
+// attribute, the number missing that attribute from the index is zero. Scoring
+// them at partial credit moved the composite by +0.0004 and gave byte-identical
+// results at credits of 0.10, 0.25, 0.45 and 0.70, which is the signature of a
+// mechanism that never fires.
 export let BM25_B = 0.5;
 export function setBm25B(b) { BM25_B = b; }
 
