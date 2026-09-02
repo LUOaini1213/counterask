@@ -52,7 +52,12 @@ function answerAs(target, facet) {
   return have?.length ? have[0] : null;
 }
 
-export function bench({ n = 400, seed = 2026, maxAsks = 3 } = {}) {
+// `patience` is the chance a shopper bothers to answer a question at all.
+// At 1.0 they are an oracle: every question is answered instantly and
+// correctly, asking costs nothing, and the benchmark will always prefer a
+// store that interrogates. Real shoppers shrug. Sweeping this is what turns
+// "how much should it ask" from taste back into a measurement.
+export function bench({ n = 400, seed = 2026, maxAsks = 3, patience = 1 } = {}) {
   const rng = mulberry32(seed);
   const stats = { n: 0, hit10: 0, hit1: 0, rrSum: 0, turnSum: 0, asked: 0, unanswerable: 0 };
   const misses = [];
@@ -70,7 +75,7 @@ export function bench({ n = 400, seed = 2026, maxAsks = 3 } = {}) {
     for (;;) {
       const d = decide(cat, scored, constraints, asks);
       if (d.action !== 'ask' || asks >= maxAsks) break;
-      const value = answerAs(target, d.facet);
+      const value = rng() < patience ? answerAs(target, d.facet) : null;
       asks++;
       if (value === null) {
         // "No preference" — the store must not then filter on it.

@@ -60,6 +60,12 @@ export function extractConstraints(query, facetValues, facetForms = null) {
   const escape = (s) => s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
 
   for (const [facet, values] of Object.entries(facetValues)) {
+    // Only facets with a curated surface-form vocabulary may be extracted from
+    // free text. The category tree has none: its leaves include bare words like
+    // "active" and "casual", so "active gym" was read as kind="active" and
+    // filtered away a target whose kind is "active shorts" — pool 7 to 0.
+    // Safe to *ask* about, unsafe to infer.
+    if (!facetForms?.[facet]) continue;
     for (const value of values) {
       // A shopper says "waterproof"; the catalog records "water resistant".
       // Matching only the canonical value found nothing on half the phrasings
@@ -108,9 +114,66 @@ export class Catalog {
         for (const v of vals) for (const w of tokenize(v)) terms.add(w);
       }
       it.terms = terms;
+      it.idx = i;
       for (const t of terms) add(t, i);
+
+      // The catalogue's own leaf category, promoted to a first-class askable
+      // attribute. Every other facet is scraped out of marketing copy and
+      // recorded on 7%-56% of products; this one is structural and present on
+      // nearly all of them, which is exactly what the question-picker wants.
+      // Injecting it as an ordinary facet rather than special-casing it means
+      // filtering, gain, phrasing and the simulated shopper all work unchanged.
+      const leaf = (it.c ?? []).filter(Boolean).slice(-1)[0];
+      if (leaf) (it.f ??= {}).kind = [leaf.toLowerCase()];
     }
     this.N = this.items.length;
+    if (!this.meta.facets.includes('kind')) this.meta.facets = ['kind', ...this.meta.facets];
+    this.facetValues = {
+      kind: [...new Set(this.items.map((it) => it.f.kind?.[0]).filter(Boolean))].sort(),
+      ...this.facetValues,
+    };
+
+    // The catalogue's own shelves. 184 of them, median 24 products, and until
+    // now entirely unused: a shopper typing "sneaker" was matched against
+    // titles while "Shoes / Fashion Sneakers" sat right there in the data.
+    this.shelves = new Map();
+    for (let i = 0; i < this.items.length; i++) {
+      const path = (this.items[i].c ?? []).join(' / ');
+      if (!path) continue;
+      let shelf = this.shelves.get(path);
+      if (!shelf) this.shelves.set(path, (shelf = { path, terms: new Set(tokenize(path)), items: [] }));
+      shelf.items.push(i);
+    }
+  }
+
+  /**
+   * The shelf a query is asking for, if it is clearly asking for one.
+   *
+   * Restricting to a shelf is a hard narrowing, so it has to be earned: the
+   * query must cover most of the shelf's own name, and the winner must be
+   * clearly ahead of the next shelf, or a vague word drags the shopper into
+   * the wrong aisle.
+   */
+  matchShelf(qTokens) {
+    if (!qTokens.length) return null;
+    const q = new Set(qTokens);
+    const scores = [];
+    for (const shelf of this.shelves.values()) {
+      let hit = 0;
+      for (const t of shelf.terms) if (q.has(t)) hit++;
+      if (!hit) continue;
+      // Cover the shelf name, and be covered by the query: "shoes" should not
+      // win "Shoes / Athletic / Running" outright over plain "Shoes".
+      const precision = hit / shelf.terms.size;
+      const recall = hit / q.size;
+      scores.push({ shelf, score: (2 * precision * recall) / (precision + recall) });
+    }
+    if (!scores.length) return null;
+    scores.sort((a, b) => b.score - a.score || b.shelf.items.length - a.shelf.items.length);
+    const best = scores[0];
+    const runnerUp = scores[1]?.score ?? 0;
+    if (best.score < 0.5) return null;
+    return { ...best, margin: best.score - runnerUp, alternatives: scores.slice(1, 4) };
   }
 
   idf(token) {
@@ -119,9 +182,13 @@ export class Catalog {
   }
 
   // Candidates matching every active constraint, scored against the free text.
-  search(query, constraints = {}) {
+  // `shelf` selects how the catalogue's own category tree is used: not at all,
+  // as a ranking bonus, or as a hard restriction. See SHELF_MODE.
+  search(query, constraints = {}, { shelf = SHELF_MODE } = {}) {
     const qTokens = tokenize(query);
     const facetKeys = Object.keys(constraints);
+    const matched = shelf === 'off' ? null : this.matchShelf(qTokens);
+    const shelfSet = matched ? new Set(matched.shelf.items) : null;
 
     // An attribute the shopper stated is not a preference to be traded off,
     // it is a fact about what they will accept.
@@ -146,9 +213,21 @@ export class Catalog {
       for (const i of this.postings.get(tok) ?? []) candidates.add(i);
     }
 
+    // A shelf restriction is only allowed to narrow, never to gut: "shorts"
+    // matches a 4-item "Clothing / Shorts" shelf while 776 products are
+    // genuinely shorts, so a restriction that would throw away almost
+    // everything is refused rather than trusted.
+    let restrictTo = null;
+    if (shelf === 'restrict' && shelfSet) {
+      let survivors = 0;
+      for (const i of candidates) if (shelfSet.has(i)) survivors++;
+      if (survivors >= 10 && survivors >= candidates.size * 0.15) restrictTo = shelfSet;
+    }
+
     const hits = [];
     for (const i of candidates) {
       const it = this.items[i];
+      if (restrictTo && !restrictTo.has(i)) continue;
       if (!passes(it)) continue;
       let weight = 0;
       const matched = [];
@@ -172,6 +251,9 @@ export class Catalog {
 
     for (const h of keep) {
       h.score = h.weight * (0.5 + 0.5 * (h.matched.length / need)) + 0.35 * popularity(h.item);
+      // Sitting on the shelf the query named is evidence the title may not
+      // spell out: a "Merrell mens Sneaker" and a running shoe share few words.
+      if (shelf === 'boost' && shelfSet?.has(h.item.idx)) h.score *= 1.35;
     }
     keep.sort((a, b) => b.score - a.score);
     return keep;
@@ -241,6 +323,11 @@ export function separation(scored) {
   return Math.max(0, (top - pack) / top);
 }
 
+// How the category tree is used by default. Set from measurement, not taste:
+// see scripts/shelf_ab.mjs.
+export let SHELF_MODE = 'off';
+export function setShelfMode(mode) { SHELF_MODE = mode; }
+
 export const POLICY = {
   // Below this many candidates the shopper can just look at the list.
   answerBelow: 12,
@@ -249,8 +336,15 @@ export const POLICY = {
   // p50 0.016 / p90 0.026 / max 0.262, so the old 0.18 sat above every
   // observation but one and the branch was dead code.
   decisiveSeparation: 0.05,
-  // Not worth spending a turn on a question that splits the pool this poorly.
-  minGain: 0.12,
+  // A question has to earn its turn, and a *proportion* cannot say whether it
+  // has. Cutting 409 candidates to 213 is worth a turn; cutting 23 to 9 is
+  // not, yet the second is the larger fraction. Tuning the ratio alone drove
+  // the store to dump 409 running shoes while interrogating someone about a
+  // 23-item sweater. So the bar is absolute — how many candidates the answer
+  // is expected to remove — with the ratio kept only as a floor against
+  // questions that barely separate anything.
+  minRemoved: 10,
+  minGain: 0.18,
   // Below this, the facet is too sparsely recorded to ask about: most of the
   // pool would be dropped for missing data rather than for not matching.
   minCoverage: 0.45,
@@ -291,23 +385,35 @@ export function decide(catalog, scored, constraints, asksSoFar = 0) {
     if (constraints[facet]) continue; // already known
     const { gain, coverage, counts } = splitValue(pool, facet);
     if (coverage < POLICY.minCoverage) continue;
-    if (!best || gain > best.gain) best = { facet, gain, coverage, counts };
+    // Rank candidate questions by candidates removed, not by share removed.
+    const removed = gain * pool.length;
+    if (!best || removed > best.removed) best = { facet, gain, coverage, counts, removed };
   }
 
-  if (!best || best.gain < POLICY.minGain) {
-    reasons.push('No remaining question would meaningfully reorder these results.');
+  if (!best || best.removed < POLICY.minRemoved || best.gain < POLICY.minGain) {
+    reasons.push(best
+      ? `Best question would only clear ~${Math.round(best.removed)} of ${pool.length} candidates — not worth a turn.`
+      : 'No remaining question would meaningfully reorder these results.');
     return { action: 'answer', pool, separation: sep, reasons };
   }
 
-  const options = [...best.counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([value, count]) => ({ value, count }));
+  // Category leaves are written for a taxonomy, not for a sentence: "wallets,
+  // card cases & money organizers" next to plain "wallets" reads as a repeat.
+  // Label with the head of the name, keep the full value for filtering.
+  const seen = new Set();
+  const options = [];
+  for (const [value, count] of [...best.counts.entries()].sort((a, b) => b[1] - a[1])) {
+    const label = value.split(/[,&]/)[0].trim() || value;
+    if (seen.has(label)) continue;
+    seen.add(label);
+    options.push({ value, label, count });
+    if (options.length === 4) break;
+  }
 
   reasons.push(
     `${pool.length} candidates, leader only ${(sep * 100).toFixed(0)}% ahead.`,
-    `Asking "${best.facet}" (recorded on ${(best.coverage*100).toFixed(0)}% of them) `
-      + `removes ~${(best.gain*100).toFixed(0)}% on average.`,
+    `Asking "${best.facet}" clears ~${Math.round(best.removed)} of them on average `
+      + `(recorded on ${(best.coverage * 100).toFixed(0)}%).`,
   );
 
   return {
@@ -323,7 +429,7 @@ export function decide(catalog, scored, constraints, asksSoFar = 0) {
 }
 
 function phrase(facet, options) {
-  const list = options.map((o) => o.value).slice(0, 4).join(', ');
+  const list = options.map((o) => o.label ?? o.value).slice(0, 4).join(', ');
   const q = {
     material: `What material are you after — ${list}?`,
     closure: `How should it fasten — ${list}?`,
@@ -335,6 +441,7 @@ function phrase(facet, options) {
     occasion: `What is the occasion — ${list}?`,
     pocket: `Do you need ${list}?`,
     waterproof: `Should it be ${list}?`,
+    kind: `What kind — ${list}?`,
   }[facet];
   return q || `Which ${facet} — ${list}?`;
 }

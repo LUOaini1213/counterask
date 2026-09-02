@@ -192,7 +192,7 @@ function renderAsk(d) {
   opts.innerHTML = '';
   for (const o of d.options) {
     const b = document.createElement('button');
-    b.innerHTML = `${o.value}<small>${o.count} items</small>`;
+    b.innerHTML = `${o.label ?? o.value}<small>${o.count} items</small>`;
     b.addEventListener('click', () => answerQuestion(o.value, 'human'));
     opts.append(b);
   }
