@@ -852,10 +852,25 @@ export function decide(catalog, scored, constraints, asksSoFar = 0, { declined =
       + `(recorded on ${(best.coverage * 100).toFixed(0)}%).`,
   );
 
+  // What the four options leave out: candidates recorded under some other
+  // value, and candidates with no value recorded at all. The first is an
+  // "or something else" the agent can put a number on; the second is what a
+  // "no preference" keeps.
+  const listed = new Set(options.map((o) => o.value));
+  let others = 0;
+  let unrecorded = 0;
+  for (const it of pool) {
+    const vals = it.f[best.facet];
+    if (!vals?.length) unrecorded++;
+    else if (!vals.some((v) => listed.has(v))) others++;
+  }
+
   return {
     action: 'ask',
     facet: best.facet,
     options,
+    others,
+    unrecorded,
     pool,
     gain: best.gain,
     separation: sep,

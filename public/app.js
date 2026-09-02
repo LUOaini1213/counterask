@@ -363,8 +363,12 @@ function snapshot(decision, extra = {}) {
       question: d.question,
       facet: d.facet,
       options: d.options,
+      otherValues: d.others ?? 0,
+      notRecorded: d.unrecorded ?? 0,
       note: 'Answering now would be a guess. Put this question to the shopper, then call answer_question — '
-        + 'or, if the conversation already answers it, call answer_question straight away.',
+        + 'or, if the conversation already answers it, call answer_question straight away. '
+        + `${d.others ? `${d.others} candidates carry a ${d.facet} value not listed; any value from list_attributes is accepted. ` : ''}`
+        + `${d.unrecorded ? `${d.unrecorded} record no ${d.facet} at all and are kept only by "no_preference".` : ''}`.trim(),
     };
   }
   if (d.action === 'empty') {
@@ -480,7 +484,7 @@ function renderAsk(d) {
   }
   const skip = document.createElement('button');
   skip.className = 'skip';
-  skip.textContent = 'No preference';
+  skip.textContent = d.others ? `No preference · ${d.others} more under other values` : 'No preference';
   skip.addEventListener('click', () => answerQuestion(null, 'human'));
   opts.append(skip);
 }
