@@ -3,33 +3,55 @@
 // The real thing is ChatGPT's browser or Chrome with WebMCP enabled, where an
 // agent calls these tools itself. Everywhere else the page would be a search
 // box with a story attached. So when modelContext is absent, the page can run
-// a *scripted* agent against a stand-in: the same seven tools, registered
-// through the same function, called in the order a real agent would call
-// them, with the conversation shown alongside. It is labelled as a simulation
-// everywhere it appears. Nothing here pretends to be WebMCP; it shows what
-// WebMCP lets the page do.
+// a *scripted* agent against a stand-in: the same tools, registered through
+// the same function, called in the order a real agent would call them, with
+// the conversation shown alongside. It is labelled as a simulation everywhere
+// it appears. Nothing here pretends to be WebMCP; it shows what WebMCP lets
+// the page do.
 
+// The stand-in follows the spec's shape: registerTool(tool, { signal })
+// resolves to nothing, aborting the signal unregisters, getTools() lists what
+// is registered, and a toolchange event fires on every change — so the page
+// code that runs here is exactly the code that runs against the real thing.
 export function standInContext() {
   const tools = new Map();
+  const listeners = new Set();
+  const changed = () => { for (const fn of listeners) fn(new Event('toolchange')); };
   return {
     tools,
-    async registerTool(spec) {
+    async registerTool(spec, { signal } = {}) {
+      if (tools.has(spec.name)) throw new DOMException(`A tool named "${spec.name}" is already registered`, 'InvalidStateError');
       tools.set(spec.name, spec);
-      return { unregister: async () => { tools.delete(spec.name); } };
+      changed();
+      signal?.addEventListener('abort', () => { if (tools.delete(spec.name)) changed(); }, { once: true });
     },
+    async getTools() {
+      return [...tools.values()].map(({ name, title, description, inputSchema, annotations }) =>
+        ({ name, title, description, inputSchema, annotations, origin: location.origin }));
+    },
+    async executeTool(tool, input = {}) {
+      const spec = tools.get(tool.name);
+      if (!spec) throw new DOMException(`No tool named "${tool.name}"`, 'NotFoundError');
+      return JSON.stringify(await spec.execute(input, {}));
+    },
+    addEventListener(type, fn) { if (type === 'toolchange') listeners.add(fn); },
+    removeEventListener(type, fn) { if (type === 'toolchange') listeners.delete(fn); },
   };
 }
 
 const money = (p) => (p != null ? ` ($${Number(p).toFixed(2)})` : '');
 const short = (t, n = 46) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
 
-export async function runScript(ctx, show, pause = (ms) => new Promise((r) => setTimeout(r, ms))) {
+// `page` is what a real browser would do for the declarative checkout tool:
+// fill the form and focus the button. The stand-in has no declarative
+// support, so the page lends the script that one move, clearly labelled.
+export async function runScript(ctx, show, pause = (ms) => new Promise((r) => setTimeout(r, ms)), page = {}) {
   const names = () => [...ctx.tools.keys()].join(', ');
   const call = async (name, args) => {
     const tool = ctx.tools.get(name);
     if (!tool) { show('note', `${name} is not registered right now — the page is not waiting for it.`); return null; }
     show('call', `${name}(${JSON.stringify(args)})`);
-    const wire = await tool.execute(args);
+    const wire = await tool.execute(args, {});
     return wire?.structuredContent ?? wire;
   };
 
@@ -78,12 +100,26 @@ export async function runScript(ctx, show, pause = (ms) => new Promise((r) => se
   show('person', 'Just show me the cheapest three.');
   await pause(700);
   const cheapest = r.products.filter((p) => p.price != null).sort((a, b) => a.price - b.price).slice(0, 3);
-  if (cheapest.length) {
-    await call('show_products', { ids: cheapest.map((p) => p.id) });
-    show('agent', `On the grid now: ${cheapest.map((p) => `${short(p.title, 36)}${money(p.price)}`).join('; ')}.`);
-  } else {
+  if (!cheapest.length) {
     show('agent', 'None of these list a price, so I have left the store’s order as it is.');
+    show('note', 'End of script. In ChatGPT’s browser or Chrome with WebMCP enabled, an agent does all of this itself.');
+    return;
+  }
+  await call('show_products', { ids: cheapest.map((p) => p.id) });
+  show('agent', `On the grid now: ${cheapest.map((p) => `${short(p.title, 36)}${money(p.price)}`).join('; ')}.`);
+  await pause(1500);
+
+  show('person', 'Put the cheapest one in my cart and order it.');
+  await pause(800);
+  const cart = await call('add_to_cart', { id: cheapest[0].id, quantity: 1 });
+  if (cart?.items?.length) {
+    show('agent', `In the cart: ${short(cart.items[0].title, 40)}${money(cart.items[0].price)}. Total $${cart.total.toFixed(2)}.`);
+    await pause(900);
+    show('agent', 'I can fill in the checkout form for you, but I cannot place the order — the store made its checkout a form without auto-submit, so the last press is yours.');
+    await pause(700);
+    show('note', 'In a WebMCP browser the checkout <form toolname="checkout"> is itself a tool: the browser fills it from the agent’s call and focuses the button. Simulating that fill now.');
+    page.fillCheckout?.({ name: 'Alex Rivera', address: '12 Harbour Lane, Portland OR 97201' });
   }
   await pause(900);
-  show('note', 'End of script. In ChatGPT’s browser or Chrome with WebMCP enabled, an agent does all of this itself.');
+  show('note', 'End of script. In ChatGPT’s browser or Chrome with WebMCP enabled, an agent does all of this itself — and still cannot press Place order.');
 }

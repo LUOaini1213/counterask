@@ -105,17 +105,29 @@ grid with `show_products` so the person sees the pick, not a transcript →
 
 ## How WebMCP was implemented
 
-Seven tools registered with `document.modelContext.registerTool` (with a
-`navigator.modelContext` fallback), all running in the tab — no server, no
-model call, no tokens:
+Nine imperative tools registered with `document.modelContext.registerTool`
+(with a `navigator.modelContext` fallback) and one declarative tool, all
+running in the tab — no server, no model call, no tokens:
 
 - `search_products` — the request in the shopper's words plus optional
   structured knowledge; returns `answer` or `need_more_evidence`.
 - `answer_question` — **registered dynamically** only while a question is
-  open, unregistered when it is answered or the search changes.
+  open, and unregistered the way the spec has it: by aborting the
+  `AbortSignal` it was registered with. The page listens to `toolchange` and
+  calls `getTools()` to show the live list, so a person can watch it come and
+  go.
 - `refine_search` (require or exclude), `list_attributes` (vocabulary with
-  counts), `show_products` (agent-curated grid), `explain_ranking`,
-  `reset_search`.
+  counts, `readOnlyHint`), `show_products` (agent-curated grid),
+  `explain_ranking` (`readOnlyHint`), `add_to_cart`, `remove_from_cart`,
+  `view_cart`, `reset_search`. Every tool carries a `title`.
+- `checkout` — a **declarative** `<form toolname="checkout">` with
+  `toolparamdescription` on its fields and *without* `toolautosubmit`: an agent
+  can fill in the name and address, the browser focuses the button, and only
+  the person places the order. The submit handler answers an agent-invoked
+  submission through `SubmitEvent.respondWith()`.
+
+Results are MCP-shaped on the wire (`content` text plus `structuredContent`),
+so a client following either convention reads the same thing.
 
 Behind them: a sentence parser (budget, ordering, refusals at both the
 recorded-attribute and title-word level, stated attributes, filler); BM25
@@ -155,10 +167,14 @@ stand-in-`modelContext` test of the tool surface run with `npm test`.
    log: `search_products` → question → `answer_question` appears in the tool
    list → the agent relays the question → answer → `show_products`. Point at
    `answer_question` vanishing afterwards.
-5. **2:15–2:45** "No results" recovery: `linen suede belt under $12` → the
-   relax buttons → 71 belts. Then `explain_ranking` on one product.
-6. **2:45–3:00** Close on the README benchmark table. "Zero servers, zero
-   tokens, one question at the right moment."
+5. **2:15–2:40** The agent adds the cheapest to the cart and fills in the
+   checkout — and stops. Point at the focused *Place order* button: the form is
+   a declarative tool without auto-submit, so the last press is the person's.
+   Press it yourself; the order confirmation appears.
+6. **2:40–3:00** "No results" recovery: `linen suede belt under $12` → the
+   relax buttons → 71 belts. Close on the README benchmark table. "Zero
+   servers, zero tokens, one question at the right moment — and one button
+   only you can press."
 
 ## Narration (word for word, ≈ 2 min 40 s at a calm pace)
 
@@ -184,6 +200,11 @@ stand-in-`modelContext` test of the tool surface run with `npm test`.
 > agent relays the question, the person answers, the agent calls
 > answer_question, and the tool is gone again. Then show_products puts the
 > pick on the grid — the person sees products, not a transcript.
+>
+> The agent adds the cheapest one to the cart and fills in the checkout — and
+> stops. The checkout is a declarative WebMCP form without auto-submit. The
+> agent can fill it; only I can press Place order. That is the spec's own
+> principle, built into the store: the human interface stays primary.
 >
 > When nothing matches — linen suede belt under twelve dollars — the store
 > doesn't say "no results". It says what to give up: drop the material, and

@@ -164,10 +164,26 @@ The store never asks about anything it has been told.
 | `search_products` | The request in the shopper's words, plus anything already known, structured. Returns products **or** a question. |
 | `answer_question` | *Registered only while a question is open.* One or more option values, or `no_preference` — which is remembered. |
 | `refine_search` | Add one requirement or one refusal mid-conversation. |
-| `list_attributes` | The vocabulary this catalog actually carries, with counts. |
+| `list_attributes` | The vocabulary this catalog actually carries, with counts. *read-only* |
 | `show_products` | Replace the grid with ids the agent picked, in its order. |
-| `explain_ranking` | Which words matched, whether the whole request matched, demand signal, policy state. |
-| `reset_search` | Clear everything, including the question budget. |
+| `explain_ranking` | Which words matched, whether the whole request matched, demand signal, policy state. *read-only* |
+| `add_to_cart` · `remove_from_cart` · `view_cart` | The cart, with line totals. |
+| `reset_search` | Clear the search, including the question budget. The cart is kept. |
+| `checkout` | **Declarative** — a `<form toolname="checkout">` without `toolautosubmit`. An agent can fill it; the browser focuses the button; only the person presses it. |
+
+Three spec details, because they are where "thorough use of WebMCP" is
+decided:
+
+- **Dynamic registration is done the way the spec does it.** `registerTool`
+  resolves to nothing; a tool is removed by aborting the `AbortSignal` it was
+  registered with. `answer_question` is registered with a fresh controller
+  while a question is open and aborted when it is answered (older polyfills
+  that hand back a handle, or expose `unregisterTool`, are honoured too).
+- **The page watches its own tool list.** `getTools()` plus the `toolchange`
+  event drive the *on offer now* line in the tool-calls panel, so a person can
+  watch `answer_question` come and go.
+- **Titles and annotations.** Every tool has a `title`; the pure reads carry
+  `readOnlyHint: true`.
 
 **When nothing matches.** A sentence with three requirements and a budget can
 empty a 9,901-product catalog, and "no results" is the least useful thing a
@@ -263,20 +279,31 @@ python -m http.server 5173 --directory public                     # or: npm star
 npm test                                                          # parser cases, tool surface, both benchmarks
 ```
 
-Then open `http://localhost:5173` in **ChatGPT's in-app browser**, or Chrome
-with WebMCP enabled, to drive it with an agent. In any other browser the
-storefront degrades to an ordinary — and fully working — search UI that
-understands the same sentences; the badge in the header tells you which mode
-you are in.
+Then open `http://localhost:5173` in **ChatGPT's in-app browser**, or in
+Chrome with WebMCP enabled, to drive it with an agent:
 
-Without WebMCP, the header also offers **a scripted agent**: the same seven
-tools, registered through the same code against a stand-in `modelContext`,
-called in the order a real agent would call them, with the conversation shown
-beside the grid — a person asks for a non-leather wallet under $30, the store
-returns a question, `answer_question` appears in the tool list, the person
-answers, it disappears, the agent asks why the first result is first and then
-curates the grid. It is labelled as a simulation wherever it appears.
-`?agent=demo` starts it on load.
+- Chrome 146 or newer, `chrome://flags/#enable-webmcp-testing` → *Enabled*,
+  restart.
+- Optionally the
+  [Model Context Tool Inspector](https://github.com/GoogleChromeLabs/webmcp-tools)
+  extension from Chrome Labs, which lists the page's tools, runs them by hand,
+  and can hand them to Gemini. Watch `answer_question` appear in its list after
+  a search for "belt".
+
+In any other browser the storefront degrades to an ordinary — and fully
+working — search UI that understands the same sentences; the badge in the
+header tells you which mode you are in.
+
+Without WebMCP, the header also offers **a scripted agent**: the same tools,
+registered through the same code against a stand-in `modelContext` that
+follows the spec's shape (`registerTool` with an `AbortSignal`, `getTools`,
+`toolchange`), called in the order a real agent would call them, with the
+conversation shown beside the grid — a person asks for a non-leather wallet
+under $30, the store returns a question, `answer_question` appears in the tool
+list, the person answers, it disappears, the agent asks why the first result
+is first, curates the grid, adds the cheapest to the cart, fills in the
+checkout, and stops — because the last press is the person's. It is labelled
+as a simulation wherever it appears. `?agent=demo` starts it on load.
 
 **Deploying.** The whole storefront is the `public/` folder, so any static
 host works. Three are pre-configured: a GitHub Pages workflow

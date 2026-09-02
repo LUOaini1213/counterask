@@ -36,6 +36,8 @@ const state = {
   pending: null,        // the question currently on screen
   scored: [],
   shown: null,          // explicit id list when an agent curates the grid
+  cart: new Map(),      // id -> quantity
+  order: null,          // the last order placed, by the person
 };
 
 // The box parses sentences too, not just the tools. These show it.
@@ -68,7 +70,28 @@ async function boot() {
   el('q').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.keyCode === 13) search(el('q').value, 'human'); });
   el('clear').addEventListener('click', () => reset('human'));
 
-  const ok = registerTools(api, logCall);
+  // A person adds from the card; an agent calls add_to_cart. Same function.
+  el('grid').addEventListener('click', (e) => {
+    const b = e.target.closest('button.add');
+    if (b) addToCart(b.dataset.id, 1, 'human');
+  });
+  el('cartItems').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-remove]');
+    if (b) removeFromCart(b.dataset.remove, 'human');
+  });
+
+  // The checkout form is a declarative WebMCP tool (see index.html). Whether a
+  // person filled it or the browser did on an agent's behalf, the submit is
+  // the person's press, and this handler is the one place an order is placed.
+  el('checkout').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const data = new FormData(e.target);
+    const result = placeOrder({ name: data.get('name'), address: data.get('address') });
+    if (e.agentInvoked && typeof e.respondWith === 'function') e.respondWith(Promise.resolve(result));
+  });
+  renderCart();
+
+  const ok = registerTools(api, logCall, undefined, renderTools);
   el('mcpdot').classList.toggle('on', ok);
   el('mcpstate').textContent = ok ? 'WebMCP tools registered' : 'WebMCP not available in this browser';
 
@@ -91,14 +114,119 @@ async function startDemo() {
   el('convoPanel').hidden = false;
   el('mcpstate').textContent = 'Scripted agent running — a simulation, WebMCP is not available in this browser';
   const ctx = standInContext();
-  registerTools(api, logCall, ctx);
+  registerTools(api, logCall, ctx, renderTools);
+  await new Promise((r) => setTimeout(r, 0));
   try {
-    await runScript(ctx, showTurn);
+    await runScript(ctx, showTurn, undefined, { fillCheckout });
   } finally {
     demoRunning = false;
     el('demoBtn').disabled = false;
     el('demoBtn').textContent = 'Run the scripted agent again';
     el('mcpstate').textContent = 'Scripted agent finished — a simulation, WebMCP is not available in this browser';
+  }
+}
+
+// The tool list as the page sees it, from getTools() and the toolchange
+// event: a person can watch answer_question come and go.
+function renderTools(names) {
+  const line = el('toolsNow');
+  if (!names?.length) { line.hidden = true; return; }
+  line.hidden = false;
+  line.innerHTML = `<b>on offer now</b> ${names.map((n) => `<code class="${n === 'answer_question' ? 'hot' : ''}">${esc(n)}</code>`).join(' ')}`;
+}
+
+// --- the cart, and the one move an agent cannot make ---------------------
+
+function cartLines() {
+  const lines = [];
+  for (const [id, quantity] of state.cart) {
+    const it = state.catalog.byId.get(id);
+    if (!it) continue;
+    const price = typeof it.p === 'number' ? it.p : null;
+    lines.push({ id, title: it.t, quantity, price, lineTotal: price != null ? +(price * quantity).toFixed(2) : null });
+  }
+  return lines;
+}
+
+function cartSnapshot(extra = {}) {
+  const items = cartLines();
+  const total = +items.reduce((a, l) => a + (l.lineTotal ?? 0), 0).toFixed(2);
+  const unpriced = items.filter((l) => l.price == null).length;
+  return {
+    status: 'cart',
+    items,
+    total,
+    ...(unpriced ? { unpricedItems: unpriced } : {}),
+    ...(state.order ? { lastOrder: state.order } : {}),
+    note: items.length
+      ? 'To order, fill in the checkout form (a declarative tool: name and address) — the shopper presses Place order.'
+      : 'The cart is empty.',
+    ...extra,
+  };
+}
+
+function addToCart(id, quantity = 1, actor = 'agent') {
+  const it = state.catalog.byId.get(id);
+  if (!it) return { ...cartSnapshot(), error: `"${id}" is not a product id in this catalogue.` };
+  const qty = Math.max(1, Math.floor(Number(quantity) || 1));
+  state.cart.set(id, (state.cart.get(id) || 0) + qty);
+  renderCart();
+  return cartSnapshot({ added: { id, title: it.t, quantity: qty } });
+}
+
+function removeFromCart(id, actor = 'agent') {
+  const had = state.cart.delete(id);
+  renderCart();
+  return cartSnapshot(had ? { removed: id } : { error: `"${id}" was not in the cart.` });
+}
+
+function placeOrder({ name, address }) {
+  const items = cartLines();
+  if (!items.length) return { status: 'no_order', error: 'The cart is empty.' };
+  if (!name || !address) return { status: 'no_order', error: 'Name and address are required.' };
+  const total = +items.reduce((a, l) => a + (l.lineTotal ?? 0), 0).toFixed(2);
+  state.order = { id: `CA-${Date.now().toString(36).toUpperCase()}`, name, address, items, total, placedBy: 'the shopper' };
+  state.cart = new Map();
+  renderCart();
+  return { status: 'placed', order: state.order };
+}
+
+// What a WebMCP browser does with a declarative tool call: fill the fields
+// and focus the button. Used only by the scripted demo, which says so.
+function fillCheckout({ name, address }) {
+  const form = el('checkout');
+  form.hidden = false;
+  form.elements.name.value = name ?? '';
+  form.elements.address.value = address ?? '';
+  form.querySelector('button[type=submit]').focus();
+  el('cartHint').textContent = 'Filled in for you. Check it, then press Place order — no agent can press it for you.';
+  el('cartHint').hidden = false;
+}
+
+function renderCart() {
+  const items = cartLines();
+  const list = el('cartItems');
+  list.innerHTML = '';
+  for (const l of items) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="ct">${esc(l.title.slice(0, 48))}</span>`
+      + `<span class="cq">×${l.quantity}</span>`
+      + `<span class="cp">${l.lineTotal != null ? `$${l.lineTotal.toFixed(2)}` : '—'}</span>`
+      + `<button type="button" data-remove="${esc(l.id)}" aria-label="Remove">×</button>`;
+    list.append(li);
+  }
+  const total = items.reduce((a, l) => a + (l.lineTotal ?? 0), 0);
+  el('cartCount').textContent = items.length ? `${items.reduce((a, l) => a + l.quantity, 0)} item${items.length > 1 ? 's' : ''}` : '';
+  el('cartTotal').textContent = items.length ? `Total $${total.toFixed(2)}` : '';
+  el('checkout').hidden = !items.length;
+  el('cartHint').hidden = items.length > 0;
+  el('cartHint').textContent = 'Nothing yet. Add from a card, or let the agent call add_to_cart.';
+  const done = el('orderDone');
+  if (state.order && !items.length) {
+    done.hidden = false;
+    done.textContent = `Order ${state.order.id} placed by you — ${state.order.items.length} item${state.order.items.length > 1 ? 's' : ''}, $${state.order.total.toFixed(2)}, to ${state.order.address}.`;
+  } else {
+    done.hidden = true;
   }
 }
 
@@ -551,6 +679,7 @@ function renderGrid(d) {
       <div class="meta">
         <span class="price">${price}</span>
         <span class="rating">${it.r ? `${it.r}★ · ${formatCount(it.n)}` : ''}</span>
+        <button type="button" class="add" data-id="${esc(it.id)}">Add</button>
       </div>`;
     grid.append(card);
   }
@@ -613,6 +742,7 @@ function formatCount(n) {
 
 const api = {
   search, refine, answerQuestion, reset, snapshot,
+  addToCart, removeFromCart, cart: () => cartSnapshot(),
   get state() { return state; },
   showProducts(ids) {
     state.shown = ids.filter((id) => state.catalog.byId.has(id));

@@ -115,6 +115,22 @@
   .price{font-family:"JetBrains Mono",monospace;font-weight:500;color:var(--ink);font-size:14px}
   .price .dim{font-family:inherit;font-weight:400;font-size:11.5px;color:var(--muted)}
   .rating{font-size:12.5px;color:var(--muted)}
+  .p .meta .add{margin-left:auto;background:var(--card);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:3px 9px;font-size:12px;font-weight:500}
+  .p .meta .add:hover{border-color:var(--ask);color:var(--ask)}
+  .cart{list-style:none;margin:0;padding:0;font-size:12.5px}
+  .cart li{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line-soft)}
+  .cart .ct{flex:1;color:var(--ink)}
+  .cart .cq,.cart .cp{font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--muted)}
+  .cart button{background:none;border:none;color:var(--muted);font-size:15px;padding:0 4px}
+  .checkout{display:flex;flex-direction:column;gap:7px;margin-top:10px}
+  .checkout input{width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:13px}
+  .checkout .row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .checkout .total{font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--ink)}
+  .done{margin:8px 0 0;font-size:12.5px;color:var(--ok)}
+  .tools{margin:0 0 8px;font-size:11.5px;color:var(--muted);line-height:1.9}
+  .tools b{font-weight:500;text-transform:uppercase;letter-spacing:.06em;font-size:10px;margin-right:4px}
+  .tools code{background:var(--line-soft);border-radius:4px;padding:1px 5px;font-size:11px}
+  .tools code.hot{background:var(--ask-soft);color:var(--ask)}
   .agentside{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
   button.small{font-size:12px;padding:5px 10px}
   .panel h4 .sim{font-weight:500;text-transform:none;letter-spacing:0;color:var(--ask);margin-left:8px;font-size:11px}
@@ -215,9 +231,30 @@
         <h4>Why this decision</h4>
         <div class="body"><pre class="trace" id="trace">Waiting for a search.</pre></div>
       </div>
+      <div class="panel" id="cartPanel">
+        <h4>Cart <span class="n" id="cartCount"></span></h4>
+        <div class="body">
+          <ul id="cartItems" class="cart"></ul>
+          <p class="hint" id="cartHint">Nothing yet. Add from a card, or let the agent call add_to_cart.</p>
+          <!-- A declarative WebMCP tool. No toolautosubmit, on purpose: an agent
+               may fill it in; the browser then focuses the button, and only
+               the person presses it. -->
+          <form id="checkout" class="checkout" hidden
+                toolname="checkout"
+                tooldescription="Place the order for everything in the cart. Fill in the shopper's name and delivery address. This form is deliberately not auto-submitted: after it is filled, the shopper reviews it and presses Place order themselves.">
+            <input name="name" type="text" placeholder="Full name" autocomplete="name" required
+                   toolparamdescription="The shopper's full name, as it should appear on the order">
+            <input name="address" type="text" placeholder="Delivery address" autocomplete="street-address" required
+                   toolparamdescription="Street address, city and postcode for delivery">
+            <div class="row"><span class="total" id="cartTotal"></span><button type="submit" class="primary small">Place order</button></div>
+          </form>
+          <p class="done" id="orderDone" hidden></p>
+        </div>
+      </div>
       <div class="panel">
         <h4>Agent tool calls</h4>
         <div class="body">
+          <p class="tools" id="toolsNow" hidden></p>
           <ul id="calls"></ul>
           <p class="hint" id="callhint">No calls yet. In ChatGPT’s browser or Chrome with WebMCP on, an agent can drive this page with <code>search_products</code>, <code>answer_question</code>, <code>refine_search</code>, <code>list_attributes</code>, <code>show_products</code>, <code>explain_ranking</code> and <code>reset_search</code>. The search box understands the same sentences the tools do.</p>
         </div>
