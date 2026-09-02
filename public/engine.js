@@ -18,6 +18,13 @@ const STOP = new Set([
   'men', 'mens', "men's", 'size', 'sizes', 'made', 'great', 'perfect',
   'quality', 'need', 'want', 'looking', 'find', 'some', 'something', 'would',
   'like', 'please', 'best', 'new', 'top',
+  // Words an agent's sentence carries and a title never does.
+  'show', 'recommend', 'suggest', 'get', 'buy', 'shop', 'hey', 'hello',
+  'thanks', 'really', 'very', 'just', 'maybe', 'ideally', 'preferably',
+  'under', 'over', 'around', 'about', 'between', 'than', 'less', 'more',
+  'least', 'most', 'budget', 'dollar', 'dollars', 'bucks', 'usd', 'price',
+  'one', 'ones', 'thing', 'things', 'stuff', 'kind', 'type', 'sort', 'option',
+  'options', 'item', 'items', 'product', 'products', 'version',
 ]);
 
 // Shoppers type plurals; catalogues are written in the singular, and vice
@@ -49,36 +56,244 @@ export function tokenize(text) {
   return [...out];
 }
 
+// --- what a sentence says ------------------------------------------------
+
+const escapeRe = (t) => t.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+// Whole-word match for a surface form, tolerant of the endings people add —
+// "buttons", "laced", "washable" — and of nothing else, or "snap" fires on
+// "snapback".
+function formRegex(form) {
+  return new RegExp(`(^|[^a-z])(${escapeRe(form)})(?:s|es|ed|d|able|ing)?(?=[^a-z]|$)`, 'g');
+}
+
+// Every place a facet value is spelled out in the text, longest form first,
+// so "leather sole" is read as a sole and not as a material plus a sole.
+// `extra` adds wording the builder deliberately does not record; see ALSO.
+function findForms(text, facetValues, facetForms, extra = null) {
+  const found = [];
+  for (const [facet, values] of Object.entries(facetValues)) {
+    // Only facets with a curated surface-form vocabulary may be read out of
+    // free text. The category tree has none: its leaves include bare words
+    // like "active" and "casual", so "active gym" was once read as
+    // kind="active" and filtered away a target whose kind is "active shorts"
+    // — pool 7 to 0. Safe to *ask* about, unsafe to infer.
+    if (!facetForms?.[facet]) continue;
+    for (const value of values) {
+      const forms = [...(facetForms[facet][value] ?? [value]), ...(extra?.[facet]?.[value] ?? [])];
+      for (const form of forms) {
+        const re = formRegex(form);
+        let m;
+        while ((m = re.exec(text))) {
+          const at = m.index + m[1].length;
+          found.push({ facet, value, at, end: at + m[0].length - m[1].length });
+        }
+      }
+    }
+  }
+  found.sort((a, b) => (b.end - b.at) - (a.end - a.at) || a.at - b.at);
+  const keep = [];
+  for (const f of found) {
+    if (keep.some((t) => f.at < t.end && t.at < f.end)) continue;
+    keep.push(f);
+  }
+  return keep.sort((a, b) => a.at - b.at);
+}
+
 // Attributes the shopper already stated, lifted straight out of their words.
 //
 // Without this the store treats "waterproof hiking boots" as three keywords
 // and can then turn around and ask whether it should be waterproof. Anything
 // they have already said is a constraint, not a search term to be weighed.
+// A shopper says "waterproof"; the catalog records "water resistant", so
+// every surface form the builder mapped onto a value is matched, whole words
+// only — "casual" must not fire on "casualwear".
 export function extractConstraints(query, facetValues, facetForms = null) {
-  const text = ` ${(query || '').toLowerCase()} `;
   const found = {};
-  const escape = (s) => s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
-
-  for (const [facet, values] of Object.entries(facetValues)) {
-    // Only facets with a curated surface-form vocabulary may be extracted from
-    // free text. The category tree has none: its leaves include bare words like
-    // "active" and "casual", so "active gym" was read as kind="active" and
-    // filtered away a target whose kind is "active shorts" — pool 7 to 0.
-    // Safe to *ask* about, unsafe to infer.
-    if (!facetForms?.[facet]) continue;
-    for (const value of values) {
-      // A shopper says "waterproof"; the catalog records "water resistant".
-      // Matching only the canonical value found nothing on half the phrasings
-      // people actually use, so match every surface form the builder mapped
-      // onto this value. Whole words only, so "casual" does not fire on
-      // "casualwear" nor "snap" on "snapback".
-      const forms = facetForms?.[facet]?.[value] ?? [value];
-      const hit = forms.some((form) =>
-        new RegExp(`(^|[^a-z])${escape(form)}([^a-z]|$)`).test(text));
-      if (hit) (found[facet] ??= []).push(value);
-    }
+  for (const f of findForms(` ${(query || '').toLowerCase()} `, facetValues, facetForms)) {
+    const list = (found[f.facet] ??= []);
+    if (!list.includes(f.value)) list.push(f.value);
   }
   return found;
+}
+
+// A search box gets "leather belt". An agent relaying a person gets "I'm
+// looking for a leather belt, nothing with a snap, under $30". Fed to a
+// keyword matcher that sentence does three wrong things at once: it requires
+// "looking" and "under" to appear in a title, it reads "snap" as a requirement
+// rather than a refusal, and it never sees the budget at all. Measured on 800
+// such sentences (scripts/agentbench.mjs) before this existed: every refusal
+// was inverted into a requirement, 71% of refused values showed up in the top
+// ten anyway, 31% of budgets were broken there, and Hit@10 fell from 0.996 to
+// 0.793 on phrasing alone.
+//
+// parseRequest takes the sentence apart in a fixed order — budget, sort,
+// refusals, stated attributes, filler — blanking each span it claims, so a
+// word read one way is never read again another way. What is left is the
+// product description, which is what the ranker wanted all along.
+
+const MONEY = String.raw`\$?\s?(\d+(?:\.\d+)?)\s?(?:dollars?|bucks|usd)?`;
+const near = (n) => ({ min: Math.floor(n * 0.75), max: Math.ceil(n * 1.25) });
+const BUDGET_RULES = [
+  [String.raw`\b(?:between|from)\s+${MONEY}\s+(?:and|to|-|–)\s+${MONEY}`, (a, b) => ({ min: +a, max: +b })],
+  [String.raw`\$\s?(\d+(?:\.\d+)?)\s?(?:-|–|to)\s?\$?\s?(\d+(?:\.\d+)?)`, (a, b) => ({ min: +a, max: +b })],
+  [String.raw`\b(\d+(?:\.\d+)?)\s?(?:-|–|to)\s?(\d+(?:\.\d+)?)\s?(?:dollars|bucks|usd)\b`, (a, b) => ({ min: +a, max: +b })],
+  [String.raw`\b(?:under|below|less than|cheaper than|lower than|up to|at most|max(?:imum)?(?: of)?|no more than|not more than|not over|not above|within|budget(?: is| of)?|capped at)\s+${MONEY}`, (a) => ({ min: null, max: +a })],
+  [String.raw`\b(?:over|above|more than|at least|min(?:imum)?(?: of)?|starting (?:at|from)|upwards of|no less than|not less than|not under)\s+${MONEY}`, (a) => ({ min: +a, max: null })],
+  [String.raw`\b(?:around|about|approximately|roughly|close to|near)\s+${MONEY}`, (a) => near(+a)],
+  [String.raw`${MONEY}\s+(?:or less|or under|or below|or cheaper|max|maximum|tops|at most|budget)\b`, (a) => ({ min: null, max: +a })],
+  [String.raw`${MONEY}\s+(?:or more|or above|or over|minimum|at least|and up)\b`, (a) => ({ min: +a, max: null })],
+  [String.raw`\$\s?(\d+(?:\.\d+)?)\b|\b(\d+(?:\.\d+)?)\s?(?:dollars|bucks|usd)\b`, (a, b) => near(+(a ?? b))],
+].map(([re, fn]) => [new RegExp(re), fn]);
+
+const SORT_RULES = [
+  [/\b(?:cheapest|lowest price|least expensive|cheap(?:er)?|inexpensive|affordable|budget[- ]friendly|on a budget|low[- ]cost)\b/, 'price_asc'],
+  [/\b(?:most expensive|priciest|premium|high[- ]end|luxury|top of the line)\b/, 'price_desc'],
+  [/\b(?:best|highest|top)[- ]rated|best reviews?|highest rating\b/, 'rating'],
+  [/\b(?:most popular|best[- ]sell(?:ing|er)|most reviewed|popular)\b/, 'popular'],
+];
+
+// "not", and everything a person says instead of "not". "non" is absent on
+// purpose: "non-slip", "non-iron" name a feature, they refuse nothing. A bare
+// "don't" is absent too — a PUMA shoe is titled "Don't Run Out Of Steam" —
+// only "don't want", "doesn't have" and their kin refuse what follows.
+const NEG_CUE = /\b(?:not|no|without|except(?:ing)?|excluding|avoid(?:ing)?|nothing|never|minus|sans|isn't|aren't|isnt|arent|(?:don't|dont|do not|wouldn't|wouldnt|would not) (?:want|need|like|care for|fancy)|(?:doesn't|doesnt|does not) (?:have|come with|need)|(?:shouldn't|shouldnt|should not|can't|cant|cannot|mustn't|must not) (?:be|have|come with)|anything but|other than|rather than|instead of)\b/g;
+
+// "no" bound to a feature name, hyphen or not: no-show socks, no-iron shirts.
+const NO_FEATURE = new Set(['show', 'iron', 'tie', 'slip', 'sweat', 'wrinkle']);
+
+// Wording people use for a value the builder records under a stricter name.
+// The builder matches substrings, so it cannot list "snap" (it would fire on
+// "snapback") or "lace" ("shoelace"); a whole-word matcher can. Used for
+// refusals only. A positive "snap belt" stays a search term, because turning
+// it into a filter would drop every snap belt whose listing never spelled out
+// "snap closure" — a requirement can only be as complete as the record. A
+// refusal is the safe direction: dropping what is *recorded* as snap is never
+// wrong, only partial, and the refused word itself is banned from titles too.
+const ALSO = {
+  closure: {
+    snap: ['snap', 'snaps'],
+    'lace-up': ['laces', 'lace', 'shoelaces', 'lace-ups', 'laced'],
+    zipper: ['zip', 'zips', 'zippered'],
+  },
+  fit: {
+    'slim fit': ['slim', 'skinny', 'fitted'],
+    'relaxed fit': ['relaxed', 'loose', 'baggy'],
+  },
+};
+
+const FILLER = [
+  /\b(?:i'?m|i am|we'?re|we are)\s+(?:looking|searching|shopping|hunting)\s+for\b/g,
+  /\b(?:looking|searching|shopping|hunting)\s+for\b/g,
+  /\b(?:i|we)\s+(?:need|want|would like|'d like|am after|require|could use)\b/g,
+  /\b(?:can|could|would|will) you\s+(?:please\s+)?(?:find|show|recommend|suggest|get|help me find)(?: me| us)?\b/g,
+  /\b(?:find|show|get|recommend|suggest|give)\s+(?:me|us)\b/g,
+  /\bdo you (?:have|sell|carry|stock)\b/g,
+  /\b(?:please|thanks|thank you|hey|hi|hello)\b/g,
+  /\bfor (?:my|a|the|his) (?:brother|dad|father|son|husband|boyfriend|friend|partner|uncle|grandpa|grandfather|nephew|colleague|coworker|boss|him|himself)(?:'s)?\b/g,
+  /\b(?:as a |for a |for his |for my )?(?:birthday|christmas|anniversary|graduation|father'?s day|wedding)(?: gift| present)?\b/g,
+  /\b(?:as a )?(?:gift|present) for\b/g,
+  /\b(?:something|anything|some|a few|a couple of|a pair of|pair of)\b/g,
+];
+
+export function parseRequest(text, catalog) {
+  let s = ` ${(text || '').toLowerCase().replace(/\s+/g, ' ')} `;
+  const out = {
+    constraints: {}, exclude: {}, excludeTerms: [], budget: null, sort: 'relevance',
+    optional: [], ignored: [], conflicts: [],
+  };
+  const blank = (at, end) => { s = `${s.slice(0, at)}${' '.repeat(end - at)}${s.slice(end)}`; };
+
+  // Budget first: "not over $50" is a ceiling, not a refusal.
+  for (const [re, fn] of BUDGET_RULES) {
+    const m = re.exec(s);
+    if (!m) continue;
+    out.budget = fn(...m.slice(1));
+    blank(m.index, m.index + m[0].length);
+    break;
+  }
+  for (const [re, sort] of SORT_RULES) {
+    const m = re.exec(s);
+    if (!m) continue;
+    out.sort = sort;
+    blank(m.index, m.index + m[0].length);
+    break;
+  }
+
+  // Refusals. A cue opens a window — two words for "no", which binds tightly
+  // ("no laces, leather"), five for "not" and "without", which take a phrase
+  // — closed early by punctuation or by "and"/"but". A facet value spelled
+  // out inside it is excluded; every other word in it is banned from titles,
+  // which is what makes "not nike" and "no hood" work with no vocabulary at
+  // all. A multi-word value that starts inside the window is taken whole, so
+  // "no big and tall" is not cut at its own "and".
+  NEG_CUE.lastIndex = 0;
+  let cue;
+  while ((cue = NEG_CUE.exec(s))) {
+    const from = cue.index + cue[0].length;
+    if (s[from] === '-') continue;                          // no-show, non-iron
+    const tail = s.slice(from);
+    const lead = tail.length - tail.trimStart().length;
+    const ext = tail.trimStart().split(' ').slice(0, 7).join(' ');
+    const first = ext.split(' ')[0] ?? '';
+    if (cue[0] === 'no' && NO_FEATURE.has(first)) continue;  // no iron shirt
+    const limit = cue[0] === 'no' ? 2 : 5;
+    const stop = ext.search(/[,.;!?]|\s(?:and|but)\s/);
+    const win = (stop === -1 ? ext : ext.slice(0, stop)).split(' ').slice(0, limit).join(' ');
+
+    const hits = findForms(ext, catalog.facetValues, catalog.facetForms, ALSO)
+      .filter((h) => h.at < win.length);
+    let rest = win;
+    for (const h of hits) {
+      const end = Math.min(h.end, rest.length);
+      rest = `${rest.slice(0, h.at)}${' '.repeat(end - h.at)}${rest.slice(end)}`;
+    }
+    const words = tokenize(rest).filter((t) => catalog.postings.has(t));
+    if (!hits.length && !words.length) continue;
+    for (const h of hits) {
+      const list = (out.exclude[h.facet] ??= []);
+      if (!list.includes(h.value)) list.push(h.value);
+      // The refused word itself is banned from titles too, so "no laces"
+      // also drops a boot the catalogue never recorded as lace-up but whose
+      // title says so. Single words only: banning "big" and "tall" for "no
+      // big and tall" would take a Big Logo hoodie with them, and "short-sleeve"
+      // would take every sleeve.
+      const span = ext.slice(h.at, h.end).trim();
+      if (/^[a-z]+$/.test(span)) words.push(...tokenize(span).filter((t) => catalog.postings.has(t)));
+    }
+    for (const t of words) if (!out.excludeTerms.includes(t)) out.excludeTerms.push(t);
+    const endRel = Math.max(win.length, ...hits.map((h) => h.end));
+    blank(cue.index, from + lead + endRel);
+    NEG_CUE.lastIndex = from + lead + endRel;
+  }
+
+  // Stated attributes. The words stay in the query — "running" still ranks
+  // running shoes above other athletic shoes — but they are reported as
+  // optional, so the title is not required to repeat what the filter already
+  // guarantees. Requiring it shrank "something for the gym" from every
+  // athletic item to the 48 whose title happens to say "gym".
+  for (const h of findForms(s, catalog.facetValues, catalog.facetForms)) {
+    const list = (out.constraints[h.facet] ??= []);
+    if (!list.includes(h.value)) list.push(h.value);
+    for (const t of tokenize(s.slice(h.at, h.end))) if (!out.optional.includes(t)) out.optional.push(t);
+  }
+
+  // "running shoes, but not for the gym": both words map to the one value
+  // this vocabulary has. The requirement is kept, the refusal is reported
+  // back rather than silently emptying the pool.
+  for (const [facet, values] of Object.entries(out.exclude)) {
+    const clash = values.filter((v) => out.constraints[facet]?.includes(v));
+    for (const value of clash) out.conflicts.push({ facet, value });
+    const left = values.filter((v) => !clash.includes(v));
+    if (left.length) out.exclude[facet] = left; else delete out.exclude[facet];
+  }
+
+  for (const re of FILLER) s = s.replace(re, ' ');
+
+  out.query = s.replace(/ +/g, ' ').replace(/( *[,;] *)+/g, ', ')
+    .replace(/^[ ,]+|[ ,]+$/g, '');
+  out.ignored = tokenize(out.query).filter((t) => !catalog.postings.has(t));
+  return out;
 }
 
 export class Catalog {
@@ -183,13 +398,33 @@ export class Catalog {
   }
 
   // Candidates matching every active constraint, scored against the free text.
+  //
+  // `optional` names the query words that were read as a stated attribute —
+  // "leather" in "leather belt". The filter already guarantees the attribute,
+  // so the title is not required to repeat the word: a belt whose listing says
+  // leather only in its bullet points still qualifies. A title that does
+  // repeat it still ranks higher.
+  //
   // `shelf` selects how the catalogue's own category tree is used: not at all,
   // as a ranking bonus, or as a hard restriction. See SHELF_MODE.
-  search(query, constraints = {}, { shelf = SHELF_MODE } = {}) {
-    const qTokens = tokenize(query);
+  search(query, constraints = {}, {
+    shelf = SHELF_MODE, exclude = {}, excludeTerms = [], budget = null,
+    sort = 'relevance', optional = [],
+  } = {}) {
+    // A word no product carries cannot be a requirement. "interview" and
+    // "brother" arrive in an agent's sentence and in no title; before this
+    // they still counted toward the conjunction, which then never held, so
+    // every such query fell through to the loose 60% floor.
+    const qTokens = tokenize(query).filter((t) => this.postings.has(t));
+    const opt = new Set(optional);
+    const required = qTokens.filter((t) => !opt.has(t));
+    const need = required.length;
     const facetKeys = Object.keys(constraints);
-    const matched = shelf === 'off' ? null : this.matchShelf(qTokens);
-    const shelfSet = matched ? new Set(matched.shelf.items) : null;
+    const exKeys = Object.keys(exclude ?? {}).filter((f) => exclude[f]?.length);
+    const banned = (excludeTerms ?? []).filter((t) => this.postings.has(t));
+    const cap = budget && (budget.max != null || budget.min != null) ? budget : null;
+    const shelfMatch = shelf === 'off' ? null : this.matchShelf(required);
+    const shelfSet = shelfMatch ? new Set(shelfMatch.shelf.items) : null;
 
     // An attribute the shopper stated is a fact about what they will accept —
     // but only against products the catalogue actually describes. Three cases,
@@ -197,7 +432,7 @@ export class Catalog {
     //
     //   records it and matches   -> full credit
     //   records it and differs   -> a real mismatch, excluded
-    //   does not record it       -> unknown, kept at reduced credit
+    //   does not record it       -> unknown, kept
     //
     // The old code collapsed the third into the second. With facets recorded on
     // as little as 7% of products, "leather" was throwing away every belt whose
@@ -208,19 +443,61 @@ export class Catalog {
         if (!have?.length) return false;
         if (!constraints[facet].some((w) => have.includes(w))) return false;
       }
+      // A refusal removes what is *recorded* as the refused value, and any
+      // product whose own words carry the refused term. A listing that never
+      // says what it is made of is not evidence that it is leather — the same
+      // rule as above, read the other way.
+      for (const facet of exKeys) {
+        const have = it.f[facet];
+        if (have?.length && exclude[facet].some((w) => have.includes(w))) return false;
+      }
+      for (const t of banned) if (it.terms.has(t)) return false;
+      // Only a fifth of this catalogue carries a price. A budget can exclude a
+      // product priced outside it; it cannot exclude one with no price at all.
+      if (cap && typeof it.p === 'number') {
+        if (cap.max != null && it.p > cap.max) return false;
+        if (cap.min != null && it.p < cap.min) return false;
+      }
       return true;
     };
 
-    if (!qTokens.length) {
-      return this.items.filter(passes)
-        .map((it) => ({ item: it, score: popularity(it), matched: [] }))
-        .sort((a, b) => b.score - a.score);
+    // BM25 length normalisation. Without it every product matching the same
+    // words scored within a rounding error of every other — separation between
+    // first place and tenth ran at a median of 0.015 — because the IDF sum is
+    // identical across them and log-scaled popularity barely varies. Length is
+    // the signal that separates them: a title that is *mostly* the shopper's
+    // words is a better match than one mentioning them in passing among twenty
+    // others. Term frequency in a title is effectively 1, so BM25's tf
+    // saturation collapses to a constant; the length term does the work.
+    const score = (it, hit, inReq) => {
+      const dl = it.terms.size || 1;
+      const norm = 1 - BM25_B + BM25_B * (dl / this.avgLen);
+      let bm = 0;
+      for (const tok of hit) bm += this.idf(tok) * ((BM25_K1 + 1) / (1 + BM25_K1 * norm));
+      const coverage = need ? 0.5 + 0.5 * (inReq / need) : 1;
+      let sc = bm * coverage + 0.35 * popularity(it);
+      if (shelf === 'boost' && shelfSet?.has(it.idx)) sc *= 1.35;
+      return sc;
+    };
+
+    if (!need) {
+      // Nothing is required of the title: everything the shopper said was an
+      // attribute the filter enforces, or a word no product carries. Every
+      // product passing the filter is a candidate, ranked by how much of the
+      // wording its own title repeats, then by demand.
+      const hits = [];
+      for (const it of this.items) {
+        if (!passes(it)) continue;
+        const hit = qTokens.filter((t) => it.terms.has(t));
+        hits.push({ item: it, matched: hit, inReq: 0, full: hit.length === qTokens.length, score: score(it, hit, 0) });
+      }
+      return hits.sort(order(sort, cap));
     }
 
-    // Only visit documents that contain at least one query term. Scanning all
-    // 9,901 items per keystroke was pure waste — the postings list exists.
+    // Only visit documents that contain at least one required term. Scanning
+    // all 9,901 items per keystroke was pure waste — the postings list exists.
     const candidates = new Set();
-    for (const tok of qTokens) {
+    for (const tok of required) {
       for (const i of this.postings.get(tok) ?? []) candidates.add(i);
     }
 
@@ -240,47 +517,24 @@ export class Catalog {
       const it = this.items[i];
       if (restrictTo && !restrictTo.has(i)) continue;
       if (!passes(it)) continue;
-      let weight = 0;
-      const matched = [];
-      for (const tok of qTokens) {
-        if (it.terms.has(tok)) { weight += this.idf(tok); matched.push(tok); }
-      }
-      if (matched.length) hits.push({ item: it, weight, matched });
+      const hit = qTokens.filter((t) => it.terms.has(t));
+      const inReq = hit.filter((t) => !opt.has(t)).length;
+      if (inReq) hits.push({ item: it, matched: hit, inReq, full: hit.length === qTokens.length });
     }
 
     // Every word the shopper typed is a requirement, not a hint: "leather
     // belt" must not return more rows than "belt". So take the conjunction
     // first, and only relax when it would leave too little to choose from —
     // the same rule the filter stage uses on stated attributes.
-    const need = qTokens.length;
-    let keep = hits.filter((h) => h.matched.length === need);
+    let keep = hits.filter((h) => h.inReq === need);
     if (keep.length < 8 && need > 1) {
       const floor = Math.max(1, Math.ceil(need * 0.6));
-      keep = hits.filter((h) => h.matched.length >= floor);
+      keep = hits.filter((h) => h.inReq >= floor);
     }
     if (!keep.length) keep = hits;
 
-    // BM25 length normalisation. Without it every product matching the same
-    // words scored within a rounding error of every other — separation between
-    // first place and tenth ran at a median of 0.015 — because the IDF sum is
-    // identical across them and log-scaled popularity barely varies. Length is
-    // the signal that separates them: a title that is *mostly* the shopper's
-    // words is a better match than one mentioning them in passing among twenty
-    // others.
-    for (const h of keep) {
-      const dl = h.item.terms.size || 1;
-      const norm = 1 - BM25_B + BM25_B * (dl / this.avgLen);
-      let bm = 0;
-      for (const tok of h.matched) {
-        // Term frequency in a title is effectively 1, so BM25's tf saturation
-        // collapses to a constant; the length term is what does the work.
-        bm += this.idf(tok) * ((BM25_K1 + 1) / (1 + BM25_K1 * norm));
-      }
-      h.score = bm * (0.5 + 0.5 * (h.matched.length / need)) + 0.35 * popularity(h.item);
-      if (shelf === 'boost' && shelfSet?.has(h.item.idx)) h.score *= 1.35;
-    }
-    keep.sort((a, b) => b.score - a.score);
-    return keep;
+    for (const h of keep) h.score = score(h.item, h.matched, h.inReq);
+    return keep.sort(order(sort, cap));
   }
 }
 
@@ -307,6 +561,49 @@ function popularity(it) {
   const n = it.n || 0;
   const r = it.r || 3.5;
   return (Math.log10(1 + n) / 5) * (r / 5);
+}
+
+// How the candidate list is ordered.
+//
+// Plain relevance is the score. Every *explicit* ordering — cheapest, best
+// rated, under a budget — is an ordering of the answers, not of everything
+// the words touch: products matching the whole request come first, then
+// those matching every required word, and within a tier the requested order
+// applies. Without the tiers "cheapest running shoes" led with a $16.99 pair
+// of socks whose listing mentions shoe size.
+//
+// Under a budget, a product with a known in-budget price is a better answer
+// than one whose listing never gave a price — prices exist for 20% of this
+// catalogue, and "under 30 dollars" was showing $45.99 in third place — but
+// again only within a tier: the first cut put every priced item first, and
+// "wool sweater around $45" led with a $40.95 pair of socks.
+function order(sort, budget) {
+  const price = (h) => (typeof h.item.p === 'number' ? h.item.p : null);
+  const byScore = (a, b) => b.score - a.score;
+  if (sort === 'relevance' && !budget) return byScore;
+
+  const tier = (a, b) => ((b.full ? 1 : 0) - (a.full ? 1 : 0))
+    || ((b.inReq ?? 0) - (a.inReq ?? 0))
+    || (budget ? ((price(b) != null) - (price(a) != null)) : 0);
+
+  let key = byScore;
+  if (sort === 'price_asc' || sort === 'price_desc') {
+    const dir = sort === 'price_asc' ? 1 : -1;
+    key = (a, b) => {
+      const pa = price(a);
+      const pb = price(b);
+      if (pa == null || pb == null) return (pa == null) - (pb == null) || byScore(a, b);
+      return dir * (pa - pb) || byScore(a, b);
+    };
+  } else if (sort === 'rating') {
+    // Five stars from one reviewer is not a better rating than 4.8 from five
+    // thousand. Shrink toward the catalogue-wide 3.5 by review count.
+    const bayes = (h) => (((h.item.r || 0) * (h.item.n || 0)) + 3.5 * 20) / ((h.item.n || 0) + 20);
+    key = (a, b) => bayes(b) - bayes(a) || byScore(a, b);
+  } else if (sort === 'popular') {
+    key = (a, b) => (b.item.n || 0) - (a.item.n || 0) || byScore(a, b);
+  }
+  return (a, b) => tier(a, b) || key(a, b);
 }
 
 // --- the stopping policy ------------------------------------------------
@@ -371,6 +668,8 @@ export function setShelfMode(mode) { SHELF_MODE = mode; }
 export const POLICY = {
   // Below this many candidates the shopper can just look at the list.
   answerBelow: 12,
+  // How many products an answer shows.
+  show: 12,
   // No decisiveSeparation. A "the leader is clear enough, stop asking" rule
   // was tried twice and failed twice. First against a separation metric that
   // compared first place with second, where the gap is noise: median 0.003,
@@ -403,9 +702,13 @@ export const POLICY = {
  * one attribute worth knowing before I answer), plus the reasoning behind the
  * choice so both the shopper and the agent can see why.
  */
-export function decide(catalog, scored, constraints, asksSoFar = 0) {
+export function decide(catalog, scored, constraints, asksSoFar = 0, { declined = [] } = {}) {
   const pool = scored.map((s) => s.item);
   const sep = separation(scored);
+  const answer = (reasons) => ({
+    action: 'answer', pool, separation: sep, reasons,
+    differentiators: differentiate(catalog, pool.slice(0, POLICY.show), constraints, declined),
+  });
 
   const reasons = [];
   const enoughAlready = pool.length <= POLICY.answerBelow;
@@ -418,13 +721,16 @@ export function decide(catalog, scored, constraints, asksSoFar = 0) {
   if (outOfBudget) reasons.push(`Already asked ${asksSoFar} questions — answering now.`);
 
   if (enoughAlready || outOfBudget) {
-    return { action: 'answer', pool, separation: sep, reasons };
+    return answer(reasons);
   }
 
   // Evidence is thin. Find the question that would separate the pool most.
   let best = null;
   for (const facet of catalog.meta.facets) {
-    if (constraints[facet]) continue; // already known
+    // Known already, or declined already. "No preference" used to be
+    // forgotten the moment it was clicked, and the same question came
+    // straight back: 12 re-asks in 800 simulated sessions.
+    if (constraints[facet] || declined.includes(facet)) continue;
     const { gain, coverage, counts } = splitValue(pool, facet);
     if (coverage < POLICY.minCoverage) continue;
     // Rank candidate questions by candidates removed, not by share removed.
@@ -436,7 +742,7 @@ export function decide(catalog, scored, constraints, asksSoFar = 0) {
     reasons.push(best
       ? `Best question would only clear ~${Math.round(best.removed)} of ${pool.length} candidates — not worth a turn.`
       : 'No remaining question would meaningfully reorder these results.');
-    return { action: 'answer', pool, separation: sep, reasons };
+    return answer(reasons);
   }
 
   // Category leaves are written for a taxonomy, not for a sentence: "wallets,
@@ -468,6 +774,26 @@ export function decide(catalog, scored, constraints, asksSoFar = 0) {
     reasons,
     question: phrase(best.facet, options),
   };
+}
+
+// What still separates the products the shopper is about to see.
+//
+// The store has just decided that no question is worth a turn. The agent
+// presenting the list can still say "these differ mainly in closure — eight
+// buckle, four snap", which is the difference between a list and an answer,
+// and can offer to narrow without the store having to ask.
+export function differentiate(catalog, shown, constraints = {}, declined = []) {
+  const out = [];
+  for (const facet of catalog.meta.facets) {
+    if (constraints[facet] || declined.includes(facet)) continue;
+    const { gain, coverage, counts } = splitValue(shown, facet);
+    if (coverage < POLICY.minCoverage || counts.size < 2) continue;
+    const splits = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)
+      .map(([value, count]) => ({ value, count }));
+    out.push({ facet, gain, splits });
+  }
+  return out.sort((a, b) => b.gain - a.gain).slice(0, 2)
+    .map(({ facet, splits }) => ({ facet, splits }));
 }
 
 function phrase(facet, options) {

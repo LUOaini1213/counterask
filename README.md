@@ -1,7 +1,8 @@
 # Counterask — the store that asks back
 
 A menswear storefront whose WebMCP tools return **a question** when answering
-would be a guess.
+would be a guess — and that reads a whole sentence the way an agent relays it:
+budget, refusals, stated attributes and all.
 
 Built for [The WebMCP Challenge](https://webmcp.devpost.com/).
 9,901 real products. No server, no model call, no tokens.
@@ -17,33 +18,94 @@ store's job is to **answer**.
 
 For most of a shopping conversation that assumption is wrong.
 
-Ask a catalog for "a leather belt" and 44 products match. Every one of them is
-leather, every one is a belt, and the top-ranked item beats the runner-up by
-1%. Ranking them is a coin flip dressed up as a recommendation. One more fact —
-how it fastens — settles it. The store knows this. It has the distribution in
-front of it. But a tool that can only return products has no way to say so, so
-it returns its coin flip and lets the agent present a guess as an answer.
+Ask this catalog for "a belt" and 97 products match. Every one of them is a
+belt, and the top-ranked item beats the tenth by 5%. Ranking them is a coin
+flip dressed up as a recommendation. One more fact — what it is made of —
+clears forty of them on average. The store knows this. It has the distribution
+in front of it. But a tool that can only return products has no way to say so,
+so it returns its coin flip and lets the agent present a guess as an answer.
 
 **Counterask gives the store a second move.** `search_products` returns one of
 two things:
 
 ```jsonc
 // enough evidence
-{ "status": "answer", "products": [ … ], "candidates": 10,
-  "why": ["10 candidates left — small enough to show."] }
+{ "status": "answer", "products": [ … ], "candidates": 58,
+  "differentiators": [ { "facet": "closure", "splits": [ {"value":"buckle","count":11}, … ] } ],
+  "why": ["Best question would only clear ~8 of 58 candidates — not worth a turn."] }
 
 // not enough evidence
 { "status": "need_more_evidence",
-  "question": "How should it fasten — buckle, snap, button?",
-  "facet": "closure",
-  "options": [ {"value":"buckle","count":33}, … ],
-  "why": ["44 candidates, leader only 1% ahead.",
-          "Asking \"closure\" (recorded on 80% of them) removes ~13% on average."],
+  "question": "What material are you after — leather, nylon, polyester, cotton?",
+  "facet": "material",
+  "options": [ {"value":"leather","count":57}, … ],
+  "why": ["97 candidates, leader only 5% ahead.",
+          "Asking \"material\" clears ~40 of them on average (recorded on 89%)."],
   "note": "Answering now would be a guess. Put this question to the shopper, then call answer_question." }
 ```
 
 The question is not a failure path. It is the store declining to guess on the
-shopper's behalf, and handing the agent the one question worth asking.
+shopper's behalf, and handing the agent the one question worth asking. And
+when the store *does* answer, it says what still separates the products it is
+showing, so the agent can summarise — "eleven buckle, one pull-on" — instead
+of reading out a list.
+
+## What an agent says is not what a search box gets
+
+A search box gets `leather belt`. An agent relaying a person gets:
+
+> I'm looking for a leather belt, nothing with a snap, not over $50
+
+Fed to a keyword matcher, that sentence does three wrong things at once: it
+requires "looking" and "over" to appear in a title, it reads "snap" as a
+requirement rather than a refusal, and it never sees the budget at all.
+
+So the store parses the sentence itself — in a fixed order, blanking each span
+it claims so a word read one way is never read again another way:
+
+| Pass | Reads | Example |
+|---|---|---|
+| budget | ceilings, floors, ranges, "around" | `under $40`, `between 20 and 30 dollars`, `not over $50` |
+| ordering | cheapest, best rated, most popular | `the cheapest running shoes you have` |
+| refusals | "not", "no", "without", "nothing with", "don't want" … | `not leather`, `no laces`, `nothing from Nike` |
+| stated attributes | every surface form the catalog builder knows | `waterproof` → water resistant, `for the gym` → athletic |
+| filler | "I'm looking for", "for my brother's birthday", "please" | dropped |
+
+Three details matter more than the regexes:
+
+**A refusal is applied at two levels.** A value the catalog *records* is
+excluded (`closure ≠ lace-up`), and the refused word itself is banned from
+titles (`"lace"`), which is what makes `not nike` and `no hood` work with no
+vocabulary at all. A product whose listing never says what it is made of is
+*not* excluded by "not leather" — missing is not a mismatch, in either
+direction.
+
+**A stated attribute is a filter, not a required title word.** "Something for
+the gym" becomes `occasion = athletic` over every athletic product, with
+titles that say "gym" ranked first. Requiring the word shrank that pool from
+790 to the 48 whose title happens to say so.
+
+**The store reports how it read you.** Every result carries an `understood`
+block — query, attributes, exclusions, budget, sort, words it ignored, and any
+conflict ("running shoes but not for the gym" names one value both ways). An
+agent can check it before trusting the answer, and a person sees the same
+thing as chips above the grid.
+
+Measured on 800 sentences written from real product records
+([`scripts/agentbench.mjs`](scripts/agentbench.mjs)), before and after:
+
+| | keyword matcher | sentence parser |
+|---|---:|---:|
+| Hit@10 | 0.793 | **0.999** |
+| Hit@1 | 0.698 | **0.885** |
+| MRR | 0.738 | **0.934** |
+| refusals inverted into requirements | 100% | **0%** |
+| refused value shown in top 10 | 71% | **0%** |
+| budget broken in top 10 | 31% | **0%** |
+| questions asked about something already said | 0 | 0 |
+| questions re-asked after "no preference" | 12 | **0** |
+
+The two-word shopper benchmark did not move: Hit@10 0.996 before and after.
 
 ## Why this is the right shape for WebMCP specifically
 
@@ -63,7 +125,7 @@ could build. It puts the person back in the loop at the exact moment the
 machine cannot decide — not as a permission prompt bolted on afterwards, but
 because the site genuinely does not know and says so.
 
-Two further things fall out of it:
+Three further things fall out of it:
 
 **The tool list is state.** `answer_question` is registered only while a
 question is open, and unregistered the moment it is answered. An agent reading
@@ -72,33 +134,38 @@ the available tools can see what the page is waiting for without being told.
 **One code path, two surfaces.** A person clicking an answer chip and an agent
 calling `answer_question` enter the same function. The page cannot drift
 between what it shows a human and what it tells an agent, because there is only
-one state machine.
+one state machine. The search box understands the same sentences the tools do.
+
+**The agent's knowledge wins.** Whatever the agent already knows from the
+conversation can be passed structured — attributes, exclusions, budget, facets
+the shopper said they do not mind — and structured input overrides the parse.
+The store never asks about anything it has been told.
 
 ## The tools
 
 | Tool | What it does |
 |---|---|
-| `search_products` | Free-text search. Returns products **or** a question. |
-| `answer_question` | *Registered only while a question is open.* Closes it. |
-| `refine_search` | Apply an attribute the shopper already volunteered. |
-| `list_attributes` | The attribute vocabulary this catalog actually carries. |
+| `search_products` | The request in the shopper's words, plus anything already known, structured. Returns products **or** a question. |
+| `answer_question` | *Registered only while a question is open.* One or more option values, or `no_preference` — which is remembered. |
+| `refine_search` | Add one requirement or one refusal mid-conversation. |
+| `list_attributes` | The vocabulary this catalog actually carries, with counts. |
 | `show_products` | Replace the grid with ids the agent picked, in its order. |
-| `explain_ranking` | Score decomposition and policy state for one product. |
-| `reset_search` | Clear query, attributes and question budget. |
+| `explain_ranking` | Which words matched, whether the whole request matched, demand signal, policy state. |
+| `reset_search` | Clear everything, including the question budget. |
 
 ## How the stopping policy works
 
 `decide()` in [`public/engine.js`](public/engine.js) answers when any of these hold:
 
 - **≤ 12 candidates** — the shopper can just look at the list.
-- **Top match ≥ 18% clear of second** — no further question changes who wins.
 - **3 questions already asked** — the budget is spent.
-- **No remaining question earns its turn** — see below.
+- **No remaining question earns its turn** — the best one would clear fewer
+  than 10 candidates, or less than 18% of the pool.
 
-Otherwise it picks the attribute with the highest expected pool reduction and
-asks about that one.
+Otherwise it asks about the attribute expected to remove the most candidates —
+skipping anything the shopper stated, and anything they declined.
 
-**Two details that took the most work:**
+**Three details that took the most work:**
 
 *Entropy is the textbook choice here and it is wrong for this data.* A product
 carries several values of the same attribute at once — a shoe is both
@@ -113,19 +180,50 @@ but it removes them for having no data, not for failing the requirement. So
 reduction is measured inside the covered subset and scaled by coverage, and any
 attribute recorded on under 45% of the pool is not asked about at all.
 
-The result, on the six built-in examples:
+*A question has to earn its turn in absolute terms.* Cutting 409 candidates to
+213 is worth a turn; cutting 23 to 9 is not, yet the second is the larger
+fraction. Tuning on the ratio alone drove the store to dump 409 running shoes
+on the shopper while interrogating them about a 23-item sweater. A "the leader
+is clear enough, stop asking" rule was built twice and removed twice — the
+second time it measurably lost more than it saved.
 
-| Query | Candidates | Decision |
-|---|---:|---|
-| `waterproof hiking boots` | 10 | answer — small enough to show |
-| `wallet` | 161 | answer — 81% are leather, so asking material is a wasted turn |
-| `leather belt` | 44 | **ask** — how should it fasten? |
-| `belt` | 92 | **ask** — what material? |
-| `running shoes` | 199 | **ask** — what occasion? |
+What the built-in examples do:
 
-`wallet` is the one to look at. 161 candidates is a lot, and the store still
-answers, because the only well-recorded attribute does not separate them. The
-policy asks when a question helps — not when the pool is merely large.
+| Query | Read as | Candidates | Decision |
+|---|---|---:|---|
+| `belt` | — | 97 | **ask** — what material? |
+| `leather belt` | material = leather | 64 | answer — best question clears only ~8 |
+| `running shoes` | occasion = athletic | 496 | **ask** — what kind? |
+| `waterproof hiking boots, no laces` | water resistant, outdoor; **not** lace-up, "lace" banned | 56 | **ask** — what kind? |
+| `a wallet that is not leather, under $30` | **not** leather; ≤ $30 | 30 | **ask** — what kind? |
+| `cheapest wool sweater` | wool; cheapest first | 23 | **ask** — what kind? |
+| `…leather belt, nothing with a snap, not over $50` | leather; **not** snap; ≤ $50 | 58 | answer — differ by closure: 11 buckle, 1 pull-on |
+
+`leather belt` is the one to look at. 64 candidates is a lot, and the store
+still answers, because no recorded attribute separates them enough to be worth
+a turn — it says so, and says what little does differ. The policy asks when a
+question helps, not when the pool is merely large.
+
+## Measured
+
+Two benchmarks, both self-supervised from the product records, both seeded:
+
+- [`scripts/bench.mjs`](scripts/bench.mjs) — the shopper a search box meets:
+  two or three title words, truthful answers.
+  **Hit@10 0.996 · Hit@1 0.836 · MRR 0.896 · 1.10 turns.**
+- [`scripts/agentbench.mjs`](scripts/agentbench.mjs) — the caller an agent
+  relays: a sentence with filler, stated attributes, a refusal, a budget.
+  **Hit@10 0.999 · Hit@1 0.885 · MRR 0.934 · 1.07 turns**, with every
+  listening check at zero failures (table above).
+
+Both know their blind spots. The simulated shopper answers instantly and only
+ever states attributes the target really has, so neither benchmark can price a
+person's patience or a missing attribute. That is why the ask threshold is
+set in absolute candidates removed, and why a "clear leader" shortcut is not
+shipped — those were the two places measurement said no.
+
+Retrieval is under a millisecond a query on a laptop; the whole storefront is
+a 0.54 MB download.
 
 ## Running it
 
@@ -136,29 +234,35 @@ python -m http.server 5173 --directory public
 
 Then open `http://localhost:5173` in **ChatGPT's in-app browser**, or Chrome
 with WebMCP enabled, to drive it with an agent. In any other browser the
-storefront degrades to an ordinary — and fully working — search UI; the badge
-in the header tells you which mode you are in.
+storefront degrades to an ordinary — and fully working — search UI that
+understands the same sentences; the badge in the header tells you which mode
+you are in.
 
 ```
 public/
   index.html      storefront
   app.js          state machine + rendering (the one code path)
-  engine.js       retrieval, attribute evidence, stopping policy
+  engine.js       sentence parser, retrieval, attribute evidence, stopping policy
   webmcp.js       tool registration, including the dynamic answer_question
   data/catalog.json
 scripts/
-  build_catalog.py  50,000-product source catalog -> 3.0 MB browser index
+  build_catalog.py  50,000-product source catalog -> browser index
+  bench.mjs         ground truth, two-word shopper
+  agentbench.mjs    ground truth, agent-relayed sentences
+  tools_test.mjs    the WebMCP surface, with a stand-in modelContext
   smoke.mjs         policy behaviour on the sample queries
-  diag.mjs          per-attribute coverage and gain for a query
+  eval.mjs          pool sizes, ask rate, timing across 50 queries
 ```
 
 ## Data
 
 Products are the menswear slice (level-2 category `Men`) of the frozen
 50,000-product catalog derived from **Amazon Reviews 2023**, McAuley Lab, UCSD.
-9,901 items, 3.0 MB raw / 0.8 MB gzipped — the whole storefront ships to the
-client. There is no ranking model and no training: demand is proxied by
-log-scaled review volume, because a frozen catalog has no click log.
+9,901 items, 2.2 MB raw / 0.54 MB gzipped — the whole storefront ships to the
+client. Prices exist for one product in five; a budget excludes what is priced
+outside it and keeps what is unpriced, ranked after. There is no ranking model
+and no training: demand is proxied by log-scaled review volume, because a
+frozen catalog has no click log.
 
 ## License
 

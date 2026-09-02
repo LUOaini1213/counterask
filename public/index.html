@@ -71,6 +71,9 @@
     border-radius:999px;padding:5px 8px 5px 13px;font-size:13px;font-weight:600;
   }
   .chip b{font-weight:500;opacity:.75}
+  .chip i{font-style:normal;opacity:.6;font-size:11px}
+  .chip.no{background:var(--ask-soft);color:var(--ask)}
+  .chip.any{background:var(--line-soft);color:var(--muted)}
   .chip button{background:none;border:none;color:inherit;font-size:15px;line-height:1;padding:2px 4px;opacity:.7}
   .chip button:hover{opacity:1}
 
@@ -110,6 +113,7 @@
   .p .brand2{font-size:12.5px;color:var(--muted)}
   .p .meta{margin-top:auto;display:flex;align-items:baseline;gap:10px;padding-top:7px;border-top:1px solid var(--line-soft)}
   .price{font-family:"JetBrains Mono",monospace;font-weight:500;color:var(--ink);font-size:14px}
+  .price .dim{font-family:inherit;font-weight:400;font-size:11.5px;color:var(--muted)}
   .rating{font-size:12.5px;color:var(--muted)}
   .tags{display:flex;gap:5px;flex-wrap:wrap}
   .tag{font-size:11px;color:var(--ok);background:var(--ok-soft);border-radius:5px;padding:2px 7px;font-weight:600}
@@ -155,7 +159,7 @@
   </header>
 
   <div class="searchrow">
-    <input id="q" type="search" placeholder="Describe what you're after — “a leather belt”, “waterproof hiking boots”…" autocomplete="off">
+    <input id="q" type="search" placeholder="Say it how you'd say it — “a leather belt, nothing with a snap, under $30”" autocomplete="off">
     <button class="primary" id="go">Search</button>
     <button class="ghost" id="clear">Reset</button>
   </div>
@@ -188,7 +192,7 @@
         <h4>Agent tool calls</h4>
         <div class="body">
           <ul id="calls"></ul>
-          <p class="hint" id="callhint">No calls yet. In ChatGPT’s browser or Chrome with WebMCP on, an agent can drive this page with <code>search_products</code>, <code>answer_question</code>, <code>refine_search</code>, <code>show_products</code> and <code>explain_ranking</code>.</p>
+          <p class="hint" id="callhint">No calls yet. In ChatGPT’s browser or Chrome with WebMCP on, an agent can drive this page with <code>search_products</code>, <code>answer_question</code>, <code>refine_search</code>, <code>list_attributes</code>, <code>show_products</code>, <code>explain_ranking</code> and <code>reset_search</code>. The search box understands the same sentences the tools do.</p>
         </div>
       </div>
     </aside>

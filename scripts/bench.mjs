@@ -14,14 +14,14 @@
 //   node scripts/bench.mjs 1000       # more targets
 
 import { readFileSync } from 'node:fs';
-import { Catalog, decide, extractConstraints, tokenize } from '../public/engine.js';
+import { Catalog, decide, parseRequest, tokenize } from '../public/engine.js';
 
 const cat = new Catalog(JSON.parse(
   readFileSync(new URL('../public/data/catalog.json', import.meta.url), 'utf8')));
 
 // Deterministic sampling, so a change in the ranker is the only thing that can
 // move the numbers between two runs.
-function mulberry32(a) {
+export function mulberry32(a) {
   return () => {
     a |= 0; a = (a + 0x6D2B79F5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
@@ -35,9 +35,9 @@ function mulberry32(a) {
 // (a unique brand name makes retrieval trivial); taking the most common ones
 // would be unfair. Take the middle: skip the single rarest term, then keep the
 // next few, which is roughly "category plus one distinguishing word".
-function queryFor(item, rng) {
+export function queryFor(item, rng, catalog = cat) {
   const terms = [...new Set(tokenize(item.t))]
-    .map((t) => ({ t, df: cat.postings.get(t)?.length ?? 0 }))
+    .map((t) => ({ t, df: catalog.postings.get(t)?.length ?? 0 }))
     .filter((x) => x.df > 0)
     .sort((a, b) => a.df - b.df);
   if (terms.length < 2) return null;
@@ -47,7 +47,7 @@ function queryFor(item, rng) {
 }
 
 // A shopper who knows what they want: answer from the target, or decline.
-function answerAs(target, facet) {
+export function answerAs(target, facet) {
   const have = target.f[facet];
   return have?.length ? have[0] : null;
 }
@@ -67,23 +67,28 @@ export function bench({ n = 400, seed = 2026, maxAsks = 3, patience = 1 } = {}) 
     const query = queryFor(target, rng);
     if (!query) continue;
 
-    let constraints = extractConstraints(query, cat.facetValues, cat.facetForms);
+    // The production path, exactly: the sentence parser first, even though a
+    // keyword query has no budget or refusal in it for the parser to find.
+    const req = parseRequest(query, cat);
+    let constraints = req.constraints;
+    const declined = [];
     let asks = 0;
-    let scored = cat.search(query, constraints);
+    let scored = cat.search(req.query, constraints, req);
 
     // Run the real loop: the policy asks, the simulated shopper answers.
     for (;;) {
-      const d = decide(cat, scored, constraints, asks);
+      const d = decide(cat, scored, constraints, asks, { declined });
       if (d.action !== 'ask' || asks >= maxAsks) break;
       const value = rng() < patience ? answerAs(target, d.facet) : null;
       asks++;
       if (value === null) {
-        // "No preference" — the store must not then filter on it.
-        constraints = { ...constraints };
-        break;
+        // "No preference" — the store must not filter on it, and must not
+        // ask it again. It may still ask something else.
+        declined.push(d.facet);
+        continue;
       }
       constraints = { ...constraints, [d.facet]: [value] };
-      scored = cat.search(query, constraints);
+      scored = cat.search(req.query, constraints, req);
     }
 
     const rank = scored.findIndex((s) => s.item.id === target.id) + 1;
@@ -108,7 +113,7 @@ export function bench({ n = 400, seed = 2026, maxAsks = 3, patience = 1 } = {}) 
   };
 }
 
-if (process.argv[1]?.endsWith('bench.mjs')) {
+if (/[\\/]bench\.mjs$/.test(process.argv[1] ?? '')) {
   const n = Number(process.argv[2]) || 400;
   const { summary, misses } = bench({ n });
   console.log(summary);

@@ -6,7 +6,7 @@
 // query takes, and how often the query's own words are being thrown away.
 
 import { readFileSync } from 'node:fs';
-import { Catalog, decide, separation, tokenize, extractConstraints, POLICY } from '../public/engine.js';
+import { Catalog, decide, separation, tokenize, parseRequest } from '../public/engine.js';
 
 const payload = JSON.parse(readFileSync(new URL('../public/data/catalog.json', import.meta.url), 'utf8'));
 const cat = new Catalog(payload);
@@ -50,8 +50,9 @@ export function run(queries = QUERIES, { verbose = false } = {}) {
   for (const q of queries) {
     const t0 = performance.now();
     // Same path the app takes: what the shopper already said is known.
-    const stated = extractConstraints(q, cat.facetValues, cat.facetForms);
-    const scored = cat.search(q, stated);
+    const req = parseRequest(q, cat);
+    const stated = req.constraints;
+    const scored = cat.search(req.query, stated, req);
     const d = decide(cat, scored, stated, 0);
     totalMs += performance.now() - t0;
 
@@ -83,7 +84,7 @@ export function run(queries = QUERIES, { verbose = false } = {}) {
     poolMax: pools[pools.length - 1],
     emptyResults: branches.get('empty') || 0,
     sepMedian: +(seps.slice().sort((a, b) => a - b)[Math.floor(seps.length / 2)]).toFixed(3),
-    sepAbove18pct: seps.filter((s) => s >= POLICY.decisiveSeparation).length,
+    sepAbove18pct: seps.filter((s) => s >= 0.18).length,
     unmatchedQueryTerms: `${(100 * droppedTerms / Math.max(totalTerms, 1)).toFixed(0)}%`,
     msPerQuery: +(totalMs / queries.length).toFixed(2),
   };
