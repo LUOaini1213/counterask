@@ -127,6 +127,7 @@ export class Catalog {
       if (leaf) (it.f ??= {}).kind = [leaf.toLowerCase()];
     }
     this.N = this.items.length;
+    this.avgLen = this.items.reduce((a, it) => a + it.terms.size, 0) / Math.max(this.N, 1);
     if (!this.meta.facets.includes('kind')) this.meta.facets = ['kind', ...this.meta.facets];
     this.facetValues = {
       kind: [...new Set(this.items.map((it) => it.f.kind?.[0]).filter(Boolean))].sort(),
@@ -249,16 +250,35 @@ export class Catalog {
     }
     if (!keep.length) keep = hits;
 
+    // BM25 length normalisation. Without it every product matching the same
+    // words scored within a rounding error of every other — separation between
+    // first place and tenth ran at a median of 0.015 — because the IDF sum is
+    // identical across them and log-scaled popularity barely varies. Length is
+    // the signal that separates them: a title that is *mostly* the shopper's
+    // words is a better match than one mentioning them in passing among twenty
+    // others.
     for (const h of keep) {
-      h.score = h.weight * (0.5 + 0.5 * (h.matched.length / need)) + 0.35 * popularity(h.item);
-      // Sitting on the shelf the query named is evidence the title may not
-      // spell out: a "Merrell mens Sneaker" and a running shoe share few words.
+      const dl = h.item.terms.size || 1;
+      const norm = 1 - BM25_B + BM25_B * (dl / this.avgLen);
+      let bm = 0;
+      for (const tok of h.matched) {
+        // Term frequency in a title is effectively 1, so BM25's tf saturation
+        // collapses to a constant; the length term is what does the work.
+        bm += this.idf(tok) * ((BM25_K1 + 1) / (1 + BM25_K1 * norm));
+      }
+      h.score = bm * (0.5 + 0.5 * (h.matched.length / need)) + 0.35 * popularity(h.item);
       if (shelf === 'boost' && shelfSet?.has(h.item.idx)) h.score *= 1.35;
     }
     keep.sort((a, b) => b.score - a.score);
     return keep;
   }
 }
+
+// BM25 constants. b controls how hard length is penalised; k1 saturates term
+// frequency, which barely matters for titles where a word appears once.
+const BM25_K1 = 1.2;
+export let BM25_B = 0.5;
+export function setBm25B(b) { BM25_B = b; }
 
 // A frozen catalog has no click log, so demand is proxied by review volume.
 // log-scaled, because the difference between 20 and 200 reviews means more
@@ -331,11 +351,15 @@ export function setShelfMode(mode) { SHELF_MODE = mode; }
 export const POLICY = {
   // Below this many candidates the shopper can just look at the list.
   answerBelow: 12,
-  // A leader this far clear of the pack will survive any extra question.
-  // Calibrated, not guessed: across a 50-query sweep separation runs
-  // p50 0.016 / p90 0.026 / max 0.262, so the old 0.18 sat above every
-  // observation but one and the branch was dead code.
-  decisiveSeparation: 0.05,
+  // No decisiveSeparation. A "the leader is clear enough, stop asking" rule
+  // was tried twice and failed twice. First against a separation metric that
+  // compared first place with second, where the gap is noise: median 0.003,
+  // and the branch fired once in fifty queries. Then again after BM25 length
+  // normalisation moved that distribution 7.6x and made the metric real — at
+  // which point the branch became measurably harmful, costing 0.0034 of
+  // composite score (0.96194 at a threshold of 0.18 against 0.96535 with the
+  // branch off). Stopping early on a confident-looking leader loses more than
+  // it saves, so separation is now reported to the shopper and not acted on.
   // A question has to earn its turn, and a *proportion* cannot say whether it
   // has. Cutting 409 candidates to 213 is worth a turn; cutting 23 to 9 is
   // not, yet the second is the larger fraction. Tuning the ratio alone drove
@@ -365,17 +389,15 @@ export function decide(catalog, scored, constraints, asksSoFar = 0) {
 
   const reasons = [];
   const enoughAlready = pool.length <= POLICY.answerBelow;
-  const clearLeader = sep >= POLICY.decisiveSeparation;
   const outOfBudget = asksSoFar >= POLICY.maxAsks;
 
   if (!pool.length) {
     return { action: 'empty', pool, reasons: ['No product matches every stated requirement.'] };
   }
   if (enoughAlready) reasons.push(`${pool.length} candidates left — small enough to show.`);
-  if (clearLeader) reasons.push(`Top match is ${(sep * 100).toFixed(0)}% clear of the runner-up.`);
   if (outOfBudget) reasons.push(`Already asked ${asksSoFar} questions — answering now.`);
 
-  if (enoughAlready || clearLeader || outOfBudget) {
+  if (enoughAlready || outOfBudget) {
     return { action: 'answer', pool, separation: sep, reasons };
   }
 
