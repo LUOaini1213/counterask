@@ -14,6 +14,18 @@ refusals and all.
 
 **Built with (tags):** webmcp, javascript, html, css, bm25, python, amazon-reviews-2023, no-backend
 
+**Live URL:** https://luoaini1213.github.io/counterask/ (GitHub Pages; no login needed;
+`?agent=demo` runs the scripted agent in any browser)
+
+**Repository:** https://github.com/LUOaini1213/counterask (MIT, public)
+
+**Testing instructions for judges:** open the live URL in the ChatGPT desktop
+app's in-app browser, or in Chrome 149+ with `chrome://flags/#enable-webmcp-testing`
+enabled. Ask for "a leather belt under $40" and watch `answer_question` appear in
+the tool list; answer it; ask why the first result is first; add one to the cart
+and ask the agent to order it — the checkout is a declarative form only you can
+submit. Without WebMCP, the header button runs the same flow as a scripted agent.
+
 ---
 
 ## Why this use case is a strong fit for WebMCP
