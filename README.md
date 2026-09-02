@@ -71,7 +71,9 @@ it claims so a word read one way is never read again another way:
 |---|---|---|
 | budget | ceilings, floors, ranges, "around" | `under $40`, `between 20 and 30 dollars`, `not over $50` |
 | ordering | cheapest, best rated, most popular | `the cheapest running shoes you have` |
-| refusals | "not", "no", "without", "nothing with", "don't want" … | `not leather`, `no laces`, `nothing from Nike` |
+| waved through | "any … is fine", "doesn't matter", "no preference on" | `any material is fine` → never asked about |
+| settings | "for work", "for a wedding", "for the beach" | ranking hints, never filters |
+| refusals | "not", "no", "without", "nothing with", "don't want", "avoid", "skip the" … | `not leather`, `no laces`, `nothing from Nike` |
 | stated attributes | every surface form the catalog builder knows | `waterproof` → water resistant, `for the gym` → athletic |
 | filler | "I'm looking for", "for my brother's birthday", "please" | dropped |
 
@@ -101,19 +103,20 @@ Measured on 800 sentences written from real product records
 | | keyword matcher | sentence parser |
 |---|---:|---:|
 | Hit@10 | 0.793 | **0.999** |
-| Hit@1 | 0.698 | **0.884** |
-| MRR | 0.738 | **0.933** |
+| Hit@1 | 0.698 | **0.901** |
+| MRR | 0.738 | **0.939** |
 | refusals inverted into requirements | 100% | **0%** |
 | refused value shown in top 10 | 71% | **0%** |
 | budget broken in top 10 | 31% | **0%** |
-| questions asked about something already said | 0 | 0 |
+| questions asked about something already said or waved through | 0 | 0 |
 | questions re-asked after "no preference" | 12 | **0** |
 
 A parser tuned on its own templates can pass while failing the next phrasing
 a person tries, so the same 800 targets are also run under a second set of
 phrasings it was never tuned on (`--holdout`: "skip the", "avoid", "max $40",
-"I have 40 dollars to spend", "in the $20-$30 range"…). Those score Hit@10
-0.999 with the same zero failures. And 45 hand-written sentences in
+"I have 40 dollars to spend", "in the $20-$30 range", "not fussy about the
+closure"…). Those score Hit@10 0.998 with the same zero failures. And 56
+hand-written sentences in
 [`scripts/parse_test.mjs`](scripts/parse_test.mjs) pin down what must be read
 and what must be left alone: *no-show socks* refuse nothing, *size 10* is not a
 budget, *41mm* is not $41, *Under Armour* is a brand.
@@ -234,10 +237,10 @@ Two benchmarks, both self-supervised from the product records, both seeded:
   **Hit@10 0.996 · Hit@1 0.836 · MRR 0.896 · 1.10 turns.**
 - [`scripts/agentbench.mjs`](scripts/agentbench.mjs) — the caller an agent
   relays: a sentence with filler, stated attributes, a refusal, a budget.
-  **Hit@10 0.999 · Hit@1 0.884 · MRR 0.933 · 1.07 turns**, with every
+  **Hit@10 0.999 · Hit@1 0.901 · MRR 0.939 · 1.06 turns**, with every
   listening check at zero failures (table above). Under held-out phrasings:
-  Hit@10 0.999 · Hit@1 0.883 · MRR 0.932, still zero failures.
-- [`scripts/parse_test.mjs`](scripts/parse_test.mjs) — 45 hand-written
+  Hit@10 0.998 · Hit@1 0.899 · MRR 0.937, still zero failures.
+- [`scripts/parse_test.mjs`](scripts/parse_test.mjs) — 56 hand-written
   sentences with what the parser must and must not take from each.
 - [`scripts/tools_test.mjs`](scripts/tools_test.mjs) — the WebMCP surface
   against a stand-in `modelContext`, including `answer_question` appearing and
@@ -292,7 +295,7 @@ scripts/
   build_catalog.py  50,000-product source catalog -> browser index
   bench.mjs         ground truth, two-word shopper
   agentbench.mjs    ground truth, agent-relayed sentences (--holdout for unseen phrasings)
-  parse_test.mjs    45 hand-written sentences the parser must read, and must not over-read
+  parse_test.mjs    56 hand-written sentences the parser must read, and must not over-read
   tools_test.mjs    the WebMCP surface, with a stand-in modelContext
   smoke.mjs         policy behaviour on the sample queries
   eval.mjs          pool sizes, ask rate, timing across 50 queries
