@@ -171,6 +171,18 @@ The store never asks about anything it has been told.
 | `reset_search` | Clear the search, including the question budget. The cart is kept. |
 | `checkout` | **Declarative** — a `<form toolname="checkout">` without `toolautosubmit`. An agent can fill it; the browser focuses the button; only the person presses it. |
 
+Every tool goes through the one call the spec defines, in
+[`public/webmcp.js`](public/webmcp.js):
+
+```js
+document.modelContext.registerTool({
+  name: "search_products",
+  description: "Search 9,901 menswear products. Pass the shopper's request in their own words …",
+  inputSchema: { type: "object", properties: { query: { type: "string" }, /* … */ }, required: ["query"] },
+  execute: async (input) => api.search(input.query, "agent", input),
+}, { signal: controller.signal });
+```
+
 Three spec details, because they are where "thorough use of WebMCP" is
 decided:
 
@@ -279,10 +291,11 @@ python -m http.server 5173 --directory public                     # or: npm star
 npm test                                                          # parser cases, tool surface, both benchmarks
 ```
 
-Then open `http://localhost:5173` in **ChatGPT's in-app browser**, or in
-Chrome with WebMCP enabled, to drive it with an agent:
+Then open `http://localhost:5173` in the **ChatGPT desktop app's in-app
+browser**, which supports WebMCP by default, or in Chrome with WebMCP
+enabled, to drive it with an agent:
 
-- Chrome 146 or newer, `chrome://flags/#enable-webmcp-testing` → *Enabled*,
+- Chrome 149 or newer, `chrome://flags/#enable-webmcp-testing` → *Enabled*,
   restart.
 - Optionally the
   [Model Context Tool Inspector](https://github.com/GoogleChromeLabs/webmcp-tools)

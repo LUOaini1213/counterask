@@ -50,7 +50,10 @@ export function registerTools(api, onCall, ctx = context(), onTools = null) {
   // both are honoured, so the dynamic tool below disappears everywhere.
   async function register(spec) {
     const controller = new AbortController();
-    const handle = await ctx.registerTool(spec, { signal: controller.signal });
+    const options = { signal: controller.signal };
+    const handle = ctx === document.modelContext
+      ? await document.modelContext.registerTool(spec, options)
+      : await ctx.registerTool(spec, options);
     return async () => {
       controller.abort();
       try { await handle?.unregister?.(); } catch { /* not a handle */ }
