@@ -87,17 +87,11 @@ FACETS: dict[str, dict[str, tuple[str, ...]]] = {
     },
 }
 
-STOP = {
-    "the", "and", "for", "with", "you", "your", "our", "this", "that", "from",
-    "are", "was", "will", "can", "has", "have", "all", "any", "not", "but",
-    "men", "mens", "men's", "size", "sizes", "made", "great", "perfect", "quality",
-}
-
-TOKEN = re.compile(r"[a-z0-9]+")
-
-
-def tokens(text: str) -> list[str]:
-    return [t for t in TOKEN.findall(text.lower()) if len(t) > 2 and t not in STOP]
+# No tokenizer here on purpose. An earlier version shipped pre-split title
+# terms, and its split disagreed with the browser's — "V-Neck T-Shirt" became
+# neck/shirt on this side and also vneck/tshirt on that one, so a product could
+# be absent from the results for a query built out of its own title. The page
+# tokenizes titles itself, with the same function it runs over queries.
 
 
 def facets_for(blob: str) -> dict[str, list[str]]:
@@ -152,7 +146,6 @@ def main() -> int:
                 "b": (d.get("store") or "")[:36],
                 "c": cats[2:5],
                 "f": fac,
-                "k": sorted(set(tokens(title)))[:24],
             })
 
     payload = {

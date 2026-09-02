@@ -95,8 +95,12 @@ export class Catalog {
 
     for (let i = 0; i < this.items.length; i++) {
       const it = this.items[i];
-      const terms = new Set();
-      for (const tok of it.k) terms.add(stem(tok));
+      // Tokenize the title here, with the very function queries go through.
+      // The build script's own tokenizer split "V-Neck T-Shirt" into neck and
+      // shirt while this one also yields vneck and tshirt, so a product could
+      // be missing from the results for a query written out of its own title.
+      // Moving the stemmer over was not enough; the split has to match too.
+      const terms = new Set(tokenize(it.t));
       // Attribute evidence is searchable too. "waterproof hiking boots" should
       // find a boot the catalogue only calls waterproof in its bullet points,
       // not just one that spells it out in the title.
