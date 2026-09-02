@@ -97,8 +97,8 @@ Measured on 800 sentences written from real product records
 | | keyword matcher | sentence parser |
 |---|---:|---:|
 | Hit@10 | 0.793 | **0.999** |
-| Hit@1 | 0.698 | **0.886** |
-| MRR | 0.738 | **0.934** |
+| Hit@1 | 0.698 | **0.884** |
+| MRR | 0.738 | **0.933** |
 | refusals inverted into requirements | 100% | **0%** |
 | refused value shown in top 10 | 71% | **0%** |
 | budget broken in top 10 | 31% | **0%** |
@@ -230,9 +230,9 @@ Two benchmarks, both self-supervised from the product records, both seeded:
   **Hit@10 0.996 · Hit@1 0.836 · MRR 0.896 · 1.10 turns.**
 - [`scripts/agentbench.mjs`](scripts/agentbench.mjs) — the caller an agent
   relays: a sentence with filler, stated attributes, a refusal, a budget.
-  **Hit@10 0.999 · Hit@1 0.886 · MRR 0.934 · 1.07 turns**, with every
+  **Hit@10 0.999 · Hit@1 0.884 · MRR 0.933 · 1.07 turns**, with every
   listening check at zero failures (table above). Under held-out phrasings:
-  Hit@10 0.999 · Hit@1 0.884 · MRR 0.933, still zero failures.
+  Hit@10 0.999 · Hit@1 0.883 · MRR 0.932, still zero failures.
 - [`scripts/parse_test.mjs`](scripts/parse_test.mjs) — 45 hand-written
   sentences with what the parser must and must not take from each.
 - [`scripts/tools_test.mjs`](scripts/tools_test.mjs) — the WebMCP surface
@@ -260,6 +260,15 @@ with WebMCP enabled, to drive it with an agent. In any other browser the
 storefront degrades to an ordinary — and fully working — search UI that
 understands the same sentences; the badge in the header tells you which mode
 you are in.
+
+Without WebMCP, the header also offers **a scripted agent**: the same seven
+tools, registered through the same code against a stand-in `modelContext`,
+called in the order a real agent would call them, with the conversation shown
+beside the grid — a person asks for a non-leather wallet under $30, the store
+returns a question, `answer_question` appears in the tool list, the person
+answers, it disappears, the agent asks why the first result is first and then
+curates the grid. It is labelled as a simulation wherever it appears.
+`?agent=demo` starts it on load.
 
 ```
 public/

@@ -6,6 +6,7 @@
 
 import { Catalog, decide, parseRequest, tokenize, POLICY } from './engine.js';
 import { registerTools } from './webmcp.js';
+import { standInContext, runScript } from './demo.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -64,12 +65,52 @@ async function boot() {
   }
 
   el('go').addEventListener('click', () => search(el('q').value, 'human'));
-  el('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') search(el('q').value, 'human'); });
+  el('q').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.keyCode === 13) search(el('q').value, 'human'); });
   el('clear').addEventListener('click', () => reset('human'));
 
   const ok = registerTools(api, logCall);
   el('mcpdot').classList.toggle('on', ok);
   el('mcpstate').textContent = ok ? 'WebMCP tools registered' : 'WebMCP not available in this browser';
+
+  // No WebMCP here: offer the scripted agent instead, and start it straight
+  // away when the page was opened with ?agent=demo.
+  if (!ok) {
+    el('demoBtn').hidden = false;
+    el('demoBtn').addEventListener('click', startDemo);
+    if (new URLSearchParams(location.search).get('agent') === 'demo') startDemo();
+  }
+}
+
+let demoRunning = false;
+async function startDemo() {
+  if (demoRunning) return;
+  demoRunning = true;
+  el('demoBtn').disabled = true;
+  reset('human');
+  el('convo').innerHTML = '';
+  el('convoPanel').hidden = false;
+  el('mcpstate').textContent = 'Scripted agent running — a simulation, WebMCP is not available in this browser';
+  const ctx = standInContext();
+  registerTools(api, logCall, ctx);
+  try {
+    await runScript(ctx, showTurn);
+  } finally {
+    demoRunning = false;
+    el('demoBtn').disabled = false;
+    el('demoBtn').textContent = 'Run the scripted agent again';
+    el('mcpstate').textContent = 'Scripted agent finished — a simulation, WebMCP is not available in this browser';
+  }
+}
+
+function showTurn(role, text) {
+  const li = document.createElement('li');
+  li.className = `turn ${role}`;
+  const who = { person: 'Person', agent: 'Agent', call: 'Tool call', note: '' }[role] ?? role;
+  li.innerHTML = `${who ? `<b>${who}</b>` : ''}${esc(text)}`;
+  el('convo').append(li);
+  // Scroll the transcript, never the page: the grid has to stay in view
+  // while the agent changes it.
+  el('convo').scrollTop = el('convo').scrollHeight;
 }
 
 function countVocab(catalog) {
@@ -133,8 +174,9 @@ function applyGiven(given) {
     const ok = accept(facet, values);
     if (ok) state.exclude[facet] = ok;
   }
-  if (given.budget_max != null || given.budget_min != null) {
-    state.budget = { min: given.budget_min ?? null, max: given.budget_max ?? null };
+  const money = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+  if (money(given.budget_max) != null || money(given.budget_min) != null) {
+    state.budget = { min: money(given.budget_min), max: money(given.budget_max) };
   }
   for (const facet of given.no_preference ?? []) {
     if (cat.facetValues[facet]) state.declined.add(facet);

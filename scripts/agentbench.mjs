@@ -105,8 +105,13 @@ function compose(target, rng, T) {
   const truth = { stated: {}, excluded: null, budget: null };
   const { FILLER, STATED, NEGATED, BUDGET } = T;
 
-  // Up to two attributes the target carries, in the wording a person uses.
-  const carried = statable.filter((f) => target.f[f]?.length && !core.includes(target.f[f][0]));
+  // Up to two attributes the target carries, in the wording a person uses —
+  // skipping any whose wording the core words already contain, so the
+  // sentence never says "running, running".
+  const coreWords = new Set(core.split(' '));
+  const said = (facet) => [target.f[facet][0], ...cat.facetForms[facet][target.f[facet][0]]]
+    .some((form) => form.split(/[\s-]+/).some((w) => coreWords.has(w)));
+  const carried = statable.filter((f) => target.f[f]?.length && !said(f));
   const nStated = Math.min(carried.length, Math.floor(rng() * 3));      // 0, 1 or 2
   for (const facet of carried.sort(() => rng() - 0.5).slice(0, nStated)) {
     const value = target.f[facet][0];

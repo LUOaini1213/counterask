@@ -22,8 +22,9 @@ const facetMap = (what) => ({
   additionalProperties: { type: 'array', items: { type: 'string' } },
 });
 
-export function registerTools(api, onCall) {
-  const ctx = context();
+// `ctx` is the browser's modelContext by default. The scripted demo passes a
+// stand-in, so the same registration code runs against both.
+export function registerTools(api, onCall, ctx = context()) {
   if (!ctx?.registerTool) return false;
 
   let answerToolHandle = null;

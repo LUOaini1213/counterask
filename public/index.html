@@ -115,6 +115,16 @@
   .price{font-family:"JetBrains Mono",monospace;font-weight:500;color:var(--ink);font-size:14px}
   .price .dim{font-family:inherit;font-weight:400;font-size:11.5px;color:var(--muted)}
   .rating{font-size:12.5px;color:var(--muted)}
+  .agentside{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+  button.small{font-size:12px;padding:5px 10px}
+  .panel h4 .sim{font-weight:500;text-transform:none;letter-spacing:0;color:var(--ask);margin-left:8px;font-size:11px}
+  #convo{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:340px;overflow:auto;font-size:12.5px;line-height:1.45}
+  #convo .turn{padding:7px 10px;border-radius:9px;background:var(--line-soft);color:var(--body)}
+  #convo .turn b{display:block;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
+  #convo .turn.person{background:var(--ok-soft);color:var(--ink)}
+  #convo .turn.agent{background:var(--card);border:1px solid var(--line);color:var(--ink)}
+  #convo .turn.call{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ask);background:var(--ask-soft);word-break:break-all}
+  #convo .turn.note{background:none;color:var(--muted);font-style:italic;padding:2px 4px}
   .relax{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0 0;font-size:13px;color:var(--muted)}
   .relax .lead{margin-right:2px}
   .relax button{
@@ -164,7 +174,10 @@
       <div class="brand">Counter<span>ask</span></div>
       <div class="tagline">Menswear that asks back when answering would be a guess.</div>
     </div>
-    <div class="agentflag"><span class="dot" id="mcpdot"></span><span id="mcpstate">checking WebMCP…</span></div>
+    <div class="agentside">
+      <div class="agentflag"><span class="dot" id="mcpdot"></span><span id="mcpstate">checking WebMCP…</span></div>
+      <button class="ghost small" id="demoBtn" hidden>Watch a scripted agent use the tools</button>
+    </div>
   </header>
 
   <div class="searchrow">
@@ -194,6 +207,10 @@
     </main>
 
     <aside>
+      <div class="panel" id="convoPanel" hidden>
+        <h4>Conversation <span class="sim">scripted agent · simulation</span></h4>
+        <div class="body"><ul id="convo"></ul></div>
+      </div>
       <div class="panel">
         <h4>Why this decision</h4>
         <div class="body"><pre class="trace" id="trace">Waiting for a search.</pre></div>
