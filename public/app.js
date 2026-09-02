@@ -4,7 +4,7 @@
 // an agent calling answer_question land in exactly the same function, so the
 // page can never tell them apart and can never drift between them.
 
-import { Catalog, decide, parseRequest, POLICY } from './engine.js';
+import { Catalog, decide, parseRequest, tokenize, POLICY } from './engine.js';
 import { registerTools } from './webmcp.js';
 
 const el = (id) => document.getElementById(id);
@@ -217,6 +217,54 @@ function evaluate(actor, extra = {}) {
   return snapshot(decision, extra);
 }
 
+// When nothing — or almost nothing — survives every requirement, say which
+// one is doing the damage. Each requirement, refusal, banned word, required
+// query word and the budget is lifted in turn and the pool re-counted. The
+// agent gets the list; the person gets buttons.
+const RELAX_BELOW = 4;
+
+function relaxations() {
+  const cat = state.catalog;
+  if (!state.query && !Object.keys(state.constraints).length) return [];
+  const base = {
+    exclude: state.exclude, excludeTerms: state.excludeTerms, budget: state.budget,
+    sort: state.sort, optional: state.optional,
+  };
+  const count = (constraints, opts) => cat.search(state.query, constraints, { ...base, ...opts }).length;
+  const out = [];
+  for (const [facet, values] of Object.entries(state.constraints)) {
+    const c = { ...state.constraints };
+    delete c[facet];
+    out.push({ drop: `${facet} = ${values.join(' / ')}`, kind: 'require', facet, candidates: count(c, {}) });
+  }
+  for (const [facet, values] of Object.entries(state.exclude)) {
+    const ex = { ...state.exclude };
+    delete ex[facet];
+    out.push({ drop: `not ${values.join(' / ')}`, kind: 'exclude', facet, candidates: count(state.constraints, { exclude: ex }) });
+  }
+  for (const word of state.excludeTerms) {
+    out.push({ drop: `not "${word}"`, kind: 'word', word, candidates: count(state.constraints, { excludeTerms: state.excludeTerms.filter((w) => w !== word) }) });
+  }
+  const required = tokenize(state.query).filter((t) => cat.postings.has(t) && !state.optional.includes(t));
+  if (required.length > 1) {
+    for (const tok of required) {
+      out.push({ drop: `the word "${tok}"`, kind: 'term', term: tok, candidates: count(state.constraints, { optional: [...state.optional, tok] }) });
+    }
+  }
+  if (state.budget) out.push({ drop: `price ${describeBudget(state.budget)}`, kind: 'budget', candidates: count(state.constraints, { budget: null }) });
+  return out.filter((r) => r.candidates > state.scored.length).sort((a, b) => b.candidates - a.candidates).slice(0, 5);
+}
+
+function applyRelaxation(r) {
+  if (r.kind === 'require') delete state.constraints[r.facet];
+  else if (r.kind === 'exclude') delete state.exclude[r.facet];
+  else if (r.kind === 'word') state.excludeTerms = state.excludeTerms.filter((w) => w !== r.word);
+  else if (r.kind === 'term') state.optional = [...state.optional, r.term];
+  else if (r.kind === 'budget') state.budget = null;
+  state.shown = null;
+  evaluate('human');
+}
+
 // --- what both surfaces receive ----------------------------------------
 
 function shownItems() {
@@ -256,6 +304,10 @@ function snapshot(decision, extra = {}) {
     base.candidatesWithPrice = priced;
     base.candidatesWithoutPrice = pool.length - priced;
   }
+  if (pool.length < RELAX_BELOW && d.action !== 'idle') {
+    const relax = relaxations();
+    if (relax.length) base.relax = relax.map(({ drop, candidates }) => ({ drop, candidates }));
+  }
 
   if (d.action === 'ask') {
     return {
@@ -269,7 +321,11 @@ function snapshot(decision, extra = {}) {
     };
   }
   if (d.action === 'empty') {
-    return { ...base, status: 'no_match', products: [], note: 'No product satisfies every requirement. Drop one with refine_search, or search again.' };
+    const hint = base.relax?.length
+      ? `Nothing satisfies every requirement. Lifting ${base.relax[0].drop} leaves ${base.relax[0].candidates}; see "relax" for the rest. `
+        + 'Ask the shopper which to give up, then search again or use refine_search.'
+      : 'No product satisfies every requirement. Drop one with refine_search, or search again.';
+    return { ...base, status: 'no_match', products: [], note: hint };
   }
   const diffs = d.differentiators ?? [];
   const describe = ({ facet, splits }) =>
@@ -279,10 +335,11 @@ function snapshot(decision, extra = {}) {
     status: 'answer',
     products: top.map(serialize),
     differentiators: diffs,
-    note: diffs.length
+    note: (diffs.length
       ? `Showing ${top.length} of ${pool.length}. They differ mainly by ${diffs.map(describe).join(' and ')}. `
         + 'Narrow with refine_search, or curate the grid with show_products.'
-      : `Showing ${top.length} of ${pool.length}. No recorded attribute separates them further.`,
+      : `Showing ${top.length} of ${pool.length}. No recorded attribute separates them further.`)
+      + (base.relax?.length ? ` Only ${pool.length} match everything; lifting ${base.relax[0].drop} would leave ${base.relax[0].candidates}.` : ''),
   };
 }
 
@@ -381,10 +438,32 @@ function renderAsk(d) {
   opts.append(skip);
 }
 
+function renderRelax(d) {
+  const box = el('relax');
+  box.innerHTML = '';
+  const pool = d.pool?.length ?? 0;
+  if (d.action === 'idle' || pool >= RELAX_BELOW) { box.hidden = true; return; }
+  const options = relaxations();
+  if (!options.length) { box.hidden = true; return; }
+  box.hidden = false;
+  const lead = document.createElement('span');
+  lead.className = 'lead';
+  lead.textContent = pool ? `Only ${pool} match everything. Without…` : 'Nothing matches everything. Without…';
+  box.append(lead);
+  for (const r of options) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.innerHTML = `${esc(r.drop)}<small>${r.candidates} items</small>`;
+    b.addEventListener('click', () => applyRelaxation(r));
+    box.append(b);
+  }
+}
+
 function renderGrid(d) {
   const grid = el('grid');
   const empty = el('empty');
   grid.innerHTML = '';
+  renderRelax(d);
 
   if (d.action === 'idle') {
     el('statusTitle').textContent = 'Start a search';

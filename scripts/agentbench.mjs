@@ -15,8 +15,9 @@
 // It runs against whatever the engine currently exports, so the same file
 // measures the store before and after it learned to parse a sentence.
 //
-//   node scripts/agentbench.mjs          # 800 targets, seeded
+//   node scripts/agentbench.mjs            # 800 targets, seeded
 //   node scripts/agentbench.mjs 2000
+//   node scripts/agentbench.mjs --holdout  # phrasings the parser was not tuned on
 
 import { readFileSync } from 'node:fs';
 import * as engine from '../public/engine.js';
@@ -56,16 +57,53 @@ const BUDGET = [
   (q, lo, hi) => `${q} up to $${hi}`,
 ];
 
+// A second set of phrasings the parser was never tuned on. `--holdout` runs
+// the benchmark on these instead, so the headline number is not a parser
+// grading its own homework.
+const HOLDOUT = {
+  FILLER: [
+    (q) => `any chance you have ${q}?`,
+    (q) => `what about ${q}`,
+    (q) => `${q} would be great, thanks`,
+    (q) => `I'm after ${q} for the weekend`,
+    (q) => `help me pick ${q}`,
+    (q) => `${q} for work`,
+  ],
+  STATED: [
+    (q, form) => `${form}, ${q}`,
+    (q, form) => `${q} — ${form} ideally`,
+    (q, form) => `${q} (${form})`,
+    (q, form) => `${q} which is ${form}`,
+  ],
+  NEGATED: [
+    (q, form) => `${q}, skip the ${form}`,
+    (q, form) => `${q}, I don't want ${form}`,
+    (q, form) => `${q} — no ${form}`,
+    (q, form) => `${q}, avoid ${form}`,
+    (q, form) => `${q}, other than ${form}`,
+    (q, form) => `${q}, definitely not ${form}`,
+  ],
+  BUDGET: [
+    (q, lo, hi) => `${q}, max $${hi}`,
+    (q, lo, hi) => `${q} for $${hi} or less`,
+    (q, lo, hi) => `${q} in the $${lo}-$${hi} range`,
+    (q, lo, hi) => `${q}, I have ${hi} dollars to spend`,
+    (q, lo, hi) => `${q} at most ${hi} bucks`,
+    (q, lo, hi) => `${q} from $${lo} to $${hi}`,
+  ],
+};
+
 const pick = (rng, arr) => arr[Math.floor(rng() * arr.length)];
 
 // Facets a person can state in words: the ones with a surface-form vocabulary.
 const statable = Object.keys(cat.facetForms ?? {});
 
-function compose(target, rng) {
+function compose(target, rng, T) {
   const core = queryFor(target, rng, cat);
   if (!core) return null;
   let q = core;
   const truth = { stated: {}, excluded: null, budget: null };
+  const { FILLER, STATED, NEGATED, BUDGET } = T;
 
   // Up to two attributes the target carries, in the wording a person uses.
   const carried = statable.filter((f) => target.f[f]?.length && !core.includes(target.f[f][0]));
@@ -97,7 +135,7 @@ function compose(target, rng) {
     const lo = Math.max(1, Math.floor(p * 0.7));
     const tpl = pick(rng, BUDGET);
     q = tpl(q, lo, hi);
-    truth.budget = { min: tpl.toString().includes('between') ? lo : null, max: hi };
+    truth.budget = { min: tpl.toString().includes('${lo}') ? lo : null, max: hi };
   }
 
   return { sentence: pick(rng, FILLER)(q), truth, core };
@@ -113,8 +151,9 @@ const parse = engine.parseRequest
     exclude: {}, budget: null, sort: 'relevance',
   });
 
-export function agentBench({ n = 800, seed = 2026, maxAsks = 3 } = {}) {
+export function agentBench({ n = 800, seed = 2026, maxAsks = 3, holdout = false } = {}) {
   const rng = mulberry32(seed);
+  const T = holdout ? HOLDOUT : { FILLER, STATED, NEGATED, BUDGET };
   const s = {
     n: 0, hit10: 0, hit1: 0, rrSum: 0, turnSum: 0, asked: 0,
     withNeg: 0, negViolated: 0, negInverted: 0,
@@ -123,10 +162,11 @@ export function agentBench({ n = 800, seed = 2026, maxAsks = 3 } = {}) {
     redundantAsks: 0, reasks: 0,
   };
   const misses = [];
+  const violations = [];
 
   for (let tries = 0; s.n < n && tries < n * 6; tries++) {
     const target = cat.items[Math.floor(rng() * cat.items.length)];
-    const made = compose(target, rng);
+    const made = compose(target, rng, T);
     if (!made) continue;
     const { sentence, truth } = made;
 
@@ -166,7 +206,10 @@ export function agentBench({ n = 800, seed = 2026, maxAsks = 3 } = {}) {
     if (truth.budget) {
       s.withBudget++;
       const { min, max } = truth.budget;
-      if (top.some((it) => typeof it.p === 'number' && (it.p > max || (min != null && it.p < min)))) s.budgetViolated++;
+      if (top.some((it) => typeof it.p === 'number' && (it.p > max || (min != null && it.p < min)))) {
+        s.budgetViolated++;
+        violations.push({ sentence, truth: truth.budget, read: req.budget });
+      }
     }
 
     const rank = scored.findIndex((x) => x.item.id === target.id) + 1;
@@ -197,14 +240,21 @@ export function agentBench({ n = 800, seed = 2026, maxAsks = 3 } = {}) {
       reasksAfterDecline: s.reasks,
     },
     misses,
+    violations,
   };
 }
 
 if (process.argv[1]?.endsWith('agentbench.mjs')) {
-  const n = Number(process.argv[2]) || 800;
-  const { summary, listening, misses } = agentBench({ n });
+  const args = process.argv.slice(2);
+  const holdout = args.includes('--holdout');
+  const n = Number(args.find((a) => /^\d+$/.test(a))) || 800;
+  const { summary, listening, misses, violations } = agentBench({ n, holdout });
+  console.log(holdout ? 'held-out phrasings' : 'tuning phrasings');
   console.log(summary);
   console.log(listening);
+  for (const v of violations.slice(0, 5)) {
+    console.log(`  budget broken: "${v.sentence}"  truth=${JSON.stringify(v.truth)} read=${JSON.stringify(v.read)}`);
+  }
   console.log(`\nmissed ${misses.length} (target not in top 10):`);
   for (const m of misses.slice(0, 12)) {
     console.log(`  rank=${String(m.rank || '-').padStart(5)} pool=${String(m.pool).padStart(4)}  "${m.sentence}"  ->  ${m.title}`);

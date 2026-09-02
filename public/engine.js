@@ -25,6 +25,8 @@ const STOP = new Set([
   'least', 'most', 'budget', 'dollar', 'dollars', 'bucks', 'usd', 'price',
   'one', 'ones', 'thing', 'things', 'stuff', 'kind', 'type', 'sort', 'option',
   'options', 'item', 'items', 'product', 'products', 'version',
+  'what', 'whats', 'which', 'how', 'where', 'there', 'here', 'them', 'they',
+  'him', 'his', 'her', 'its', 'okay', 'yeah', 'thanks',
 ]);
 
 // Shoppers type plurals; catalogues are written in the singular, and vice
@@ -132,18 +134,23 @@ export function extractConstraints(query, facetValues, facetForms = null) {
 // word read one way is never read again another way. What is left is the
 // product description, which is what the ranker wanted all along.
 
-const MONEY = String.raw`\$?\s?(\d+(?:\.\d+)?)\s?(?:dollars?|bucks|usd)?`;
+const AMOUNT = String.raw`(\d+(?:\.\d+)?)(?![a-z0-9])(?!\s*(?:mm|cm|inch|inches|in\b|ft|feet|oz|lbs?|kg|ml|pack|packs|pairs?|pcs|pieces?|count|ct|x\b|"|”|%))`;
+const MONEY = String.raw`\$?\s?${AMOUNT}\s?(?:dollars?|bucks|usd)?`;
+const MARKED = String.raw`(?:\$\s?${AMOUNT}|${AMOUNT}\s?(?:dollars?|bucks|usd))`;
 const near = (n) => ({ min: Math.floor(n * 0.75), max: Math.ceil(n * 1.25) });
 const BUDGET_RULES = [
-  [String.raw`\b(?:between|from)\s+${MONEY}\s+(?:and|to|-|–)\s+${MONEY}`, (a, b) => ({ min: +a, max: +b })],
-  [String.raw`\$\s?(\d+(?:\.\d+)?)\s?(?:-|–|to)\s?\$?\s?(\d+(?:\.\d+)?)`, (a, b) => ({ min: +a, max: +b })],
-  [String.raw`\b(\d+(?:\.\d+)?)\s?(?:-|–|to)\s?(\d+(?:\.\d+)?)\s?(?:dollars|bucks|usd)\b`, (a, b) => ({ min: +a, max: +b })],
+  [String.raw`\b(?:between|from)\s+${MONEY}\s*(?:and|to|-|–)\s*${MONEY}`, (a, b) => ({ min: +a, max: +b })],
+  [String.raw`\$\s?${AMOUNT}\s?(?:-|–|to)\s?\$?\s?${AMOUNT}`, (a, b) => ({ min: +a, max: +b })],
+  [String.raw`\b${AMOUNT}\s?(?:-|–|to)\s?${AMOUNT}\s?(?:dollars|bucks|usd)\b`, (a, b) => ({ min: +a, max: +b })],
   [String.raw`\b(?:under|below|less than|cheaper than|lower than|up to|at most|max(?:imum)?(?: of)?|no more than|not more than|not over|not above|within|budget(?: is| of)?|capped at)\s+${MONEY}`, (a) => ({ min: null, max: +a })],
   [String.raw`\b(?:over|above|more than|at least|min(?:imum)?(?: of)?|starting (?:at|from)|upwards of|no less than|not less than|not under)\s+${MONEY}`, (a) => ({ min: +a, max: null })],
+  [String.raw`\b(?:have|got)\s+${MONEY}\s+to spend\b`, (a) => ({ min: null, max: +a })],
+  [String.raw`${MONEY}\s+to spend\b`, (a) => ({ min: null, max: +a })],
+  [String.raw`\b(?:have|got|spend|spending|pay|paying)\s+(?:about |around |up to )?${MARKED}`, (a, b) => ({ min: null, max: +(a ?? b) })],
   [String.raw`\b(?:around|about|approximately|roughly|close to|near)\s+${MONEY}`, (a) => near(+a)],
   [String.raw`${MONEY}\s+(?:or less|or under|or below|or cheaper|max|maximum|tops|at most|budget)\b`, (a) => ({ min: null, max: +a })],
   [String.raw`${MONEY}\s+(?:or more|or above|or over|minimum|at least|and up)\b`, (a) => ({ min: +a, max: null })],
-  [String.raw`\$\s?(\d+(?:\.\d+)?)\b|\b(\d+(?:\.\d+)?)\s?(?:dollars|bucks|usd)\b`, (a, b) => near(+(a ?? b))],
+  [String.raw`${MARKED}`, (a, b) => near(+(a ?? b))],
 ].map(([re, fn]) => [new RegExp(re), fn]);
 
 const SORT_RULES = [
@@ -157,7 +164,7 @@ const SORT_RULES = [
 // purpose: "non-slip", "non-iron" name a feature, they refuse nothing. A bare
 // "don't" is absent too — a PUMA shoe is titled "Don't Run Out Of Steam" —
 // only "don't want", "doesn't have" and their kin refuse what follows.
-const NEG_CUE = /\b(?:not|no|without|except(?:ing)?|excluding|avoid(?:ing)?|nothing|never|minus|sans|isn't|aren't|isnt|arent|(?:don't|dont|do not|wouldn't|wouldnt|would not) (?:want|need|like|care for|fancy)|(?:doesn't|doesnt|does not) (?:have|come with|need)|(?:shouldn't|shouldnt|should not|can't|cant|cannot|mustn't|must not) (?:be|have|come with)|anything but|other than|rather than|instead of)\b/g;
+const NEG_CUE = /\b(?:not|no|without|except(?:ing)?|excluding|avoid(?:ing)?|nothing|never|minus|sans|isn't|aren't|isnt|arent|(?:don't|dont|do not|wouldn't|wouldnt|would not) (?:want|need|like|care for|fancy)|(?:doesn't|doesnt|does not) (?:have|come with|need)|(?:shouldn't|shouldnt|should not|can't|cant|cannot|mustn't|must not) (?:be|have|come with)|anything but|other than|rather than|instead of|skip(?: the)?|leave out(?: the)?)\b/g;
 
 // "no" bound to a feature name, hyphen or not: no-show socks, no-iron shirts.
 const NO_FEATURE = new Set(['show', 'iron', 'tie', 'slip', 'sweat', 'wrinkle']);
@@ -194,6 +201,23 @@ const FILLER = [
   /\b(?:as a |for a |for his |for my )?(?:birthday|christmas|anniversary|graduation|father'?s day|wedding)(?: gift| present)?\b/g,
   /\b(?:as a )?(?:gift|present) for\b/g,
   /\b(?:something|anything|some|a few|a couple of|a pair of|pair of)\b/g,
+  /\b(?:that is|that's|which is|ones? that (?:is|are)|you have|you've got|you sell|you carry|in stock|ones?)\b/g,
+  /\b(?:what about|how about|any chance (?:you have|of)|help me (?:pick|find|choose)|would be (?:great|nice|perfect)|ideally|if possible)\b/g,
+];
+
+// "for work" is not a search for the word "work". A setting the shopper
+// mentions is turned into ranking hints — words that lift products written for
+// that setting — and never into a filter, because the catalogue does not
+// record settings and a filter can only be as complete as the record.
+const CONTEXT = [
+  [/\bfor (?:work|the office|business|meetings)\b/g, 'business formal office'],
+  [/\bfor (?:a |the )?(?:wedding|funeral|interview|graduation|party)\b/g, 'formal dress'],
+  [/\bfor (?:the )?(?:weekend|everyday|every day|daily wear|lounging around)\b/g, 'casual'],
+  [/\bfor (?:the )?(?:beach|pool|swimming)\b/g, 'beach swim'],
+  [/\bfor (?:the )?(?:winter|cold weather|snow)\b/g, 'winter warm thermal'],
+  [/\bfor (?:the )?(?:summer|hot weather)\b/g, 'summer lightweight breathable'],
+  [/\bfor (?:travel|traveling|travelling|a trip|flights?)\b/g, 'travel'],
+  [/\bfor (?:school|college|campus)\b/g, 'casual'],
 ];
 
 export function parseRequest(text, catalog) {
@@ -286,6 +310,14 @@ export function parseRequest(text, catalog) {
     for (const value of clash) out.conflicts.push({ facet, value });
     const left = values.filter((v) => !clash.includes(v));
     if (left.length) out.exclude[facet] = left; else delete out.exclude[facet];
+  }
+
+  for (const [re, hint] of CONTEXT) {
+    if (!re.test(s)) continue;
+    re.lastIndex = 0;
+    s = s.replace(re, ' ');
+    s += ` ${hint}`;
+    for (const t of tokenize(hint)) if (!out.optional.includes(t)) out.optional.push(t);
   }
 
   for (const re of FILLER) s = s.replace(re, ' ');
@@ -751,7 +783,7 @@ export function decide(catalog, scored, constraints, asksSoFar = 0, { declined =
   const seen = new Set();
   const options = [];
   for (const [value, count] of [...best.counts.entries()].sort((a, b) => b[1] - a[1])) {
-    const label = value.split(/[,&]/)[0].trim() || value;
+    const label = value.length <= 22 ? value : (value.split(/[,&]/)[0].trim() || value);
     if (seen.has(label)) continue;
     seen.add(label);
     options.push({ value, label, count });
@@ -809,7 +841,7 @@ function phrase(facet, options) {
     occasion: `What is the occasion — ${list}?`,
     pocket: `Do you need ${list}?`,
     waterproof: `Should it be ${list}?`,
-    kind: `What kind — ${list}?`,
+    kind: `Which category — ${list}?`,
   }[facet];
   return q || `Which ${facet} — ${list}?`;
 }
