@@ -270,6 +270,13 @@ answers, it disappears, the agent asks why the first result is first and then
 curates the grid. It is labelled as a simulation wherever it appears.
 `?agent=demo` starts it on load.
 
+**Deploying.** The whole storefront is the `public/` folder, so any static
+host works. Three are pre-configured: a GitHub Pages workflow
+([`.github/workflows/pages.yml`](.github/workflows/pages.yml)) that runs the
+tests and publishes on every push to `main` once Pages is set to *GitHub
+Actions* in the repository settings; [`netlify.toml`](netlify.toml); and
+[`vercel.json`](vercel.json).
+
 ```
 public/
   index.html      storefront

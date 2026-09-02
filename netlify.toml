@@ -1,0 +1,9 @@
+# Netlify: serve public/ as-is. No build step — the whole storefront is static.
+[build]
+  publish = "public"
+  command = ""
+
+[[headers]]
+  for = "/data/*"
+  [headers.values]
+    Cache-Control = "public, max-age=86400"
