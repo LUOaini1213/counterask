@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Counterask — the store that asks back</title>
+<meta name="description" content="A menswear storefront whose WebMCP tools return a question when answering would be a guess.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --paper:#FBFAF7; --card:#FFFFFF; --ink:#16181B; --body:#3A3D43; --muted:#767B84;
+    --line:#E6E3DC; --line-soft:#F0EEE8;
+    --ask:#B45309; --ask-soft:#FDF3E7;
+    --ok:#0F5D57; --ok-soft:#E9F2F1;
+    --shadow:0 1px 2px rgba(20,22,26,.04),0 8px 24px rgba(20,22,26,.06);
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --paper:#111214; --card:#191B1E; --ink:#F0EFEB; --body:#C7C9CE; --muted:#8B9098;
+    --line:#2A2D31; --line-soft:#212428;
+    --ask:#E0913D; --ask-soft:#2A2018;
+    --ok:#5FBFB2; --ok-soft:#16241F;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.28);
+  }}
+  :root[data-theme="dark"]{
+    --paper:#111214; --card:#191B1E; --ink:#F0EFEB; --body:#C7C9CE; --muted:#8B9098;
+    --line:#2A2D31; --line-soft:#212428;
+    --ask:#E0913D; --ask-soft:#2A2018;
+    --ok:#5FBFB2; --ok-soft:#16241F;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.28);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--paper); color:var(--body);
+    font-family:Archivo,-apple-system,"Segoe UI",system-ui,sans-serif;
+    font-size:15px; line-height:1.6; -webkit-font-smoothing:antialiased;
+  }
+  .shell{max-width:1240px;margin:0 auto;padding:0 24px 80px}
+
+  header{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;padding:26px 0 20px;border-bottom:1px solid var(--line)}
+  .brand{font-weight:700;font-size:20px;color:var(--ink);letter-spacing:-.02em}
+  .brand span{color:var(--ask)}
+  .tagline{color:var(--muted);font-size:14px}
+  .agentflag{
+    margin-left:auto;display:inline-flex;align-items:center;gap:7px;
+    font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px;
+    color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 11px;
+  }
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--muted)}
+  .dot.on{background:var(--ok)}
+
+  .searchrow{display:flex;gap:10px;margin:22px 0 6px;flex-wrap:wrap}
+  #q{
+    flex:1 1 340px;min-width:0;font:inherit;font-size:16px;color:var(--ink);
+    background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 16px;
+  }
+  #q::placeholder{color:var(--muted)}
+  #q:focus-visible,button:focus-visible{outline:2px solid var(--ok);outline-offset:2px}
+  button{font:inherit;font-weight:600;cursor:pointer;border-radius:10px;border:1px solid transparent}
+  .primary{background:var(--ink);color:var(--paper);padding:13px 22px}
+  .ghost{background:transparent;color:var(--muted);border-color:var(--line);padding:13px 16px}
+  .examples{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0 0}
+  .examples button{background:var(--line-soft);color:var(--body);border-color:transparent;font-weight:500;font-size:13px;padding:5px 11px;border-radius:999px}
+  .examples button:hover{border-color:var(--line)}
+
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0 0;min-height:0}
+  .chip{
+    display:inline-flex;align-items:center;gap:8px;background:var(--ok-soft);color:var(--ok);
+    border-radius:999px;padding:5px 8px 5px 13px;font-size:13px;font-weight:600;
+  }
+  .chip b{font-weight:500;opacity:.75}
+  .chip button{background:none;border:none;color:inherit;font-size:15px;line-height:1;padding:2px 4px;opacity:.7}
+  .chip button:hover{opacity:1}
+
+  /* the moment the store asks back */
+  .ask{
+    margin:22px 0 0;background:var(--ask-soft);border:1px solid var(--ask);
+    border-radius:14px;padding:22px 24px;box-shadow:var(--shadow);
+  }
+  .ask .eyebrow{
+    font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--ask);margin:0 0 10px;font-weight:500;
+  }
+  .ask h2{
+    font-family:Newsreader,Georgia,serif;font-weight:400;font-size:clamp(21px,2.6vw,27px);
+    color:var(--ink);margin:0 0 16px;line-height:1.3;text-wrap:balance;
+  }
+  .opts{display:flex;gap:8px;flex-wrap:wrap}
+  .opts button{
+    background:var(--card);border:1px solid var(--ask);color:var(--ink);
+    padding:8px 14px;font-size:14px;font-weight:600;
+  }
+  .opts button small{display:block;font-weight:400;color:var(--muted);font-size:11.5px;margin-top:1px}
+  .opts button:hover{background:var(--ask);color:#fff}
+  .opts button:hover small{color:rgba(255,255,255,.8)}
+  .skip{background:none!important;border-color:var(--line)!important;color:var(--muted)!important;font-weight:500!important}
+
+  .layout{display:grid;grid-template-columns:1fr 320px;gap:28px;align-items:start;margin-top:26px}
+  @media(max-width:940px){.layout{grid-template-columns:1fr}}
+
+  .status{display:flex;align-items:baseline;gap:10px;margin:0 0 14px}
+  .status h3{font-size:15px;color:var(--ink);margin:0;font-weight:600}
+  .status .n{font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--muted)}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(228px,1fr));gap:14px}
+  .p{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 16px;display:flex;flex-direction:column;gap:7px}
+  .p .t{color:var(--ink);font-weight:600;font-size:14px;line-height:1.4}
+  .p .brand2{font-size:12.5px;color:var(--muted)}
+  .p .meta{margin-top:auto;display:flex;align-items:baseline;gap:10px;padding-top:7px;border-top:1px solid var(--line-soft)}
+  .price{font-family:"JetBrains Mono",monospace;font-weight:500;color:var(--ink);font-size:14px}
+  .rating{font-size:12.5px;color:var(--muted)}
+  .tags{display:flex;gap:5px;flex-wrap:wrap}
+  .tag{font-size:11px;color:var(--ok);background:var(--ok-soft);border-radius:5px;padding:2px 7px;font-weight:600}
+
+  aside{position:sticky;top:18px;display:flex;flex-direction:column;gap:14px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .panel h4{
+    margin:0;padding:12px 15px;border-bottom:1px solid var(--line-soft);
+    font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--muted);font-weight:500;
+  }
+  .panel .body{padding:13px 15px;font-size:13px}
+  .trace{
+    font-family:"JetBrains Mono",monospace;font-size:11.5px;line-height:1.75;
+    color:var(--body);margin:0;max-height:280px;overflow-y:auto;
+    white-space:pre-wrap;overflow-wrap:anywhere;
+  }
+  .trace .k{color:var(--ask)}
+  .trace .v{color:var(--ok)}
+  #calls{list-style:none;margin:0;padding:0;font-family:"JetBrains Mono",monospace;font-size:11.5px;max-height:240px;overflow:auto}
+  #calls li{padding:7px 0;border-bottom:1px solid var(--line-soft)}
+  #calls li:last-child{border:none}
+  #calls .nm{color:var(--ink);font-weight:500}
+  #calls .rs{color:var(--muted)}
+  .hint{color:var(--muted);font-size:12.5px;margin:0}
+  .hint code{font-family:"JetBrains Mono",monospace;font-size:11.5px;background:var(--line-soft);padding:1px 5px;border-radius:4px;color:var(--body)}
+
+  footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
+  footer a{color:var(--body)}
+  .empty{color:var(--muted);padding:34px 0}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header>
+    <div>
+      <div class="brand">Counter<span>ask</span></div>
+      <div class="tagline">Menswear that asks back when answering would be a guess.</div>
+    </div>
+    <div class="agentflag"><span class="dot" id="mcpdot"></span><span id="mcpstate">checking WebMCP…</span></div>
+  </header>
+
+  <div class="searchrow">
+    <input id="q" type="search" placeholder="Describe what you're after — “a leather belt”, “waterproof hiking boots”…" autocomplete="off">
+    <button class="primary" id="go">Search</button>
+    <button class="ghost" id="clear">Reset</button>
+  </div>
+  <div class="examples" id="examples"></div>
+
+  <div class="chips" id="chips"></div>
+
+  <section class="ask" id="ask" hidden>
+    <p class="eyebrow" id="askwhy">Not enough evidence to rank</p>
+    <h2 id="askq"></h2>
+    <div class="opts" id="askopts"></div>
+  </section>
+
+  <div class="layout">
+    <main>
+      <div class="status">
+        <h3 id="statusTitle">Start a search</h3>
+        <span class="n" id="statusN"></span>
+      </div>
+      <div class="grid" id="grid"></div>
+      <p class="empty" id="empty" hidden>Nothing matches every stated requirement. Drop a filter above.</p>
+    </main>
+
+    <aside>
+      <div class="panel">
+        <h4>Why this decision</h4>
+        <div class="body"><pre class="trace" id="trace">Waiting for a search.</pre></div>
+      </div>
+      <div class="panel">
+        <h4>Agent tool calls</h4>
+        <div class="body">
+          <ul id="calls"></ul>
+          <p class="hint" id="callhint">No calls yet. In ChatGPT’s browser or Chrome with WebMCP on, an agent can drive this page with <code>search_products</code>, <code>answer_question</code>, <code>refine_search</code>, <code>show_products</code> and <code>explain_ranking</code>.</p>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <footer>
+    9,901 menswear products from the frozen Amazon Reviews 2023 catalog (McAuley Lab, UCSD).
+    Retrieval, attribute extraction and the stopping policy all run in this tab —
+    no server, no model call, no tokens. <a href="https://github.com/" id="repo">Source</a>
+  </footer>
+</div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
