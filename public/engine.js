@@ -8,35 +8,103 @@
 // This one works out whether answering is the best move it has, and when it
 // isn't, it hands back the question worth asking instead.
 
+// Words that carry no product meaning. Note what is *not* here: "shirt",
+// "shoe", "belt". An earlier version stopped-out "shirt" as too common, which
+// made "t-shirt" tokenize to nothing at all and quietly return the entire
+// catalog ranked by popularity. A word being frequent is what IDF is for.
 const STOP = new Set([
-  'the','and','for','with','you','your','our','this','that','from','are','was',
-  'will','can','has','have','all','any','not','but','men','mens',"men's",'size',
-  'sizes','made','great','perfect','quality','need','want','looking','find','some',
-  'something','would','like','please','shirt' /* kept in title match, weak alone */,
+  'the', 'and', 'for', 'with', 'you', 'your', 'our', 'this', 'that', 'from',
+  'are', 'was', 'will', 'can', 'has', 'have', 'all', 'any', 'not', 'but',
+  'men', 'mens', "men's", 'size', 'sizes', 'made', 'great', 'perfect',
+  'quality', 'need', 'want', 'looking', 'find', 'some', 'something', 'would',
+  'like', 'please', 'best', 'new', 'top',
 ]);
 
+// Shoppers type plurals; catalogues are written in the singular, and vice
+// versa. "chinos" returned nothing at all until this existed.
+export function stem(word) {
+  if (word.length > 4 && word.endsWith('ies')) return `${word.slice(0, -3)}y`;
+  if (word.length > 4 && (word.endsWith('ches') || word.endsWith('shes') || word.endsWith('xes'))) {
+    return word.slice(0, -2);
+  }
+  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1);
+  return word;
+}
+
 export function tokenize(text) {
-  return (text || '')
-    .toLowerCase()
-    .match(/[a-z0-9]+/g)
-    ?.filter((t) => t.length > 2 && !STOP.has(t)) ?? [];
+  const raw = (text || '').toLowerCase();
+  const out = new Set();
+
+  // Hyphenated and apostrophised compounds carry meaning as a unit *and* as
+  // parts: "t-shirt" has to survive as "tshirt" and as "shirt", because the
+  // catalogue writes it both ways.
+  for (const compound of raw.match(/[a-z0-9]+(?:[-'][a-z0-9]+)+/g) ?? []) {
+    const joined = compound.replace(/[-']/g, '');
+    if (joined.length > 2) out.add(stem(joined));
+  }
+  for (const word of raw.match(/[a-z0-9]+/g) ?? []) {
+    if (word.length <= 2 || STOP.has(word)) continue;
+    out.add(stem(word));
+  }
+  return [...out];
+}
+
+// Attributes the shopper already stated, lifted straight out of their words.
+//
+// Without this the store treats "waterproof hiking boots" as three keywords
+// and can then turn around and ask whether it should be waterproof. Anything
+// they have already said is a constraint, not a search term to be weighed.
+export function extractConstraints(query, facetValues, facetForms = null) {
+  const text = ` ${(query || '').toLowerCase()} `;
+  const found = {};
+  const escape = (s) => s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+  for (const [facet, values] of Object.entries(facetValues)) {
+    for (const value of values) {
+      // A shopper says "waterproof"; the catalog records "water resistant".
+      // Matching only the canonical value found nothing on half the phrasings
+      // people actually use, so match every surface form the builder mapped
+      // onto this value. Whole words only, so "casual" does not fire on
+      // "casualwear" nor "snap" on "snapback".
+      const forms = facetForms?.[facet]?.[value] ?? [value];
+      const hit = forms.some((form) =>
+        new RegExp(`(^|[^a-z])${escape(form)}([^a-z]|$)`).test(text));
+      if (hit) (found[facet] ??= []).push(value);
+    }
+  }
+  return found;
 }
 
 export class Catalog {
   constructor(payload) {
     this.meta = payload.meta;
     this.facetValues = payload.facetValues;
+    this.facetForms = payload.facetForms ?? null;
     this.items = payload.items;
     this.byId = new Map(this.items.map((it) => [it.id, it]));
 
-    // Inverted index over title keywords, plus document frequency for IDF.
+    // Both sides of the match go through the same stemmer. Doing it here
+    // rather than in the build script is deliberate: one stemmer, one file,
+    // so a query token and an index token can never be normalised differently.
     this.postings = new Map();
+    const add = (tok, i) => {
+      let list = this.postings.get(tok);
+      if (!list) this.postings.set(tok, (list = []));
+      if (list[list.length - 1] !== i) list.push(i);
+    };
+
     for (let i = 0; i < this.items.length; i++) {
-      for (const tok of this.items[i].k) {
-        let list = this.postings.get(tok);
-        if (!list) this.postings.set(tok, (list = []));
-        list.push(i);
+      const it = this.items[i];
+      const terms = new Set();
+      for (const tok of it.k) terms.add(stem(tok));
+      // Attribute evidence is searchable too. "waterproof hiking boots" should
+      // find a boot the catalogue only calls waterproof in its bullet points,
+      // not just one that spells it out in the title.
+      for (const vals of Object.values(it.f)) {
+        for (const v of vals) for (const w of tokenize(v)) terms.add(w);
       }
+      it.terms = terms;
+      for (const t of terms) add(t, i);
     }
     this.N = this.items.length;
   }
@@ -51,32 +119,37 @@ export class Catalog {
     const qTokens = tokenize(query);
     const facetKeys = Object.keys(constraints);
 
-    // Constraint filtering first: an attribute the shopper stated is not a
-    // preference to be traded off, it is a fact about what they will accept.
-    let pool = [];
-    for (let i = 0; i < this.items.length; i++) {
-      const it = this.items[i];
-      let ok = true;
+    // An attribute the shopper stated is not a preference to be traded off,
+    // it is a fact about what they will accept.
+    const passes = (it) => {
       for (const facet of facetKeys) {
-        const want = constraints[facet];
         const have = it.f[facet];
-        if (!have || !want.some((w) => have.includes(w))) { ok = false; break; }
+        if (!have || !constraints[facet].some((w) => have.includes(w))) return false;
       }
-      if (ok) pool.push(it);
-    }
+      return true;
+    };
 
     if (!qTokens.length) {
-      return pool
+      return this.items.filter(passes)
         .map((it) => ({ item: it, score: popularity(it), matched: [] }))
         .sort((a, b) => b.score - a.score);
     }
 
+    // Only visit documents that contain at least one query term. Scanning all
+    // 9,901 items per keystroke was pure waste — the postings list exists.
+    const candidates = new Set();
+    for (const tok of qTokens) {
+      for (const i of this.postings.get(tok) ?? []) candidates.add(i);
+    }
+
     const hits = [];
-    for (const it of pool) {
+    for (const i of candidates) {
+      const it = this.items[i];
+      if (!passes(it)) continue;
       let weight = 0;
       const matched = [];
       for (const tok of qTokens) {
-        if (it.k.includes(tok)) { weight += this.idf(tok); matched.push(tok); }
+        if (it.terms.has(tok)) { weight += this.idf(tok); matched.push(tok); }
       }
       if (matched.length) hits.push({ item: it, weight, matched });
     }
@@ -146,21 +219,32 @@ export function splitValue(pool, facet) {
   return { gain: Math.max(0, coverage * reduction), coverage, counts };
 }
 
-// How separable the top of the ranking is. If the leader is clearly ahead,
-// another question cannot change who wins, so asking it only costs a turn.
+// How far clear of the pack the leader is.
+//
+// The first version compared the top score with the runner-up. On this data
+// that gap is almost always noise — median 0.003 across a 50-query sweep, and
+// the "clear leader" branch fired once in fifty. Two near-identical products
+// scoring within a rounding error of each other says nothing about whether the
+// *leader* is distinctive; it says those two are twins.
+//
+// Comparing the leader with the tenth-placed candidate asks the question the
+// policy actually cares about: is there one obvious answer here, or a crowd?
 export function separation(scored) {
   if (scored.length < 2) return 1;
   const top = scored[0].score;
-  const next = scored[1].score;
   if (top <= 0) return 0;
-  return (top - next) / top;
+  const pack = scored[Math.min(9, scored.length - 1)].score;
+  return Math.max(0, (top - pack) / top);
 }
 
 export const POLICY = {
   // Below this many candidates the shopper can just look at the list.
   answerBelow: 12,
-  // A leader this far clear of second place will survive any extra question.
-  decisiveSeparation: 0.18,
+  // A leader this far clear of the pack will survive any extra question.
+  // Calibrated, not guessed: across a 50-query sweep separation runs
+  // p50 0.016 / p90 0.026 / max 0.262, so the old 0.18 sat above every
+  // observation but one and the branch was dead code.
+  decisiveSeparation: 0.05,
   // Not worth spending a turn on a question that splits the pool this poorly.
   minGain: 0.12,
   // Below this, the facet is too sparsely recorded to ask about: most of the

@@ -163,6 +163,13 @@ def main() -> int:
             "facets": list(FACETS.keys()),
         },
         "facetValues": {k: sorted(v.keys()) for k, v in FACETS.items()},
+        # The wording a shopper uses is rarely the canonical value: they type
+        # "waterproof", the catalog records "water resistant". Ship the surface
+        # forms so the page can recognise what was already said.
+        "facetForms": {
+            facet: {value: list(forms) for value, forms in values.items()}
+            for facet, values in FACETS.items()
+        },
         "items": kept,
     }
 

@@ -4,7 +4,7 @@
 // an agent calling answer_question land in exactly the same function, so the
 // page can never tell them apart and can never drift between them.
 
-import { Catalog, decide, POLICY } from './engine.js';
+import { Catalog, decide, extractConstraints, POLICY } from './engine.js';
 import { registerTools } from './webmcp.js';
 
 const el = (id) => document.getElementById(id);
@@ -13,6 +13,7 @@ const state = {
   catalog: null,
   query: '',
   constraints: {},   // facet -> [values]
+  stated: new Set(), // facets the shopper volunteered, vs ones we asked for
   asks: 0,
   pending: null,     // the question currently on screen
   scored: [],
@@ -56,7 +57,12 @@ async function boot() {
 
 function search(query, actor = 'agent') {
   state.query = (query || '').trim();
-  state.constraints = {};
+  // Anything the shopper already said is known, not still-to-be-asked. This
+  // buys nothing in pool size — attribute values are indexed as search terms
+  // anyway — but it stops the store asking "what material?" at someone who
+  // just typed "wool socks", which it did on 2 of 36 questions before.
+  state.constraints = extractConstraints(state.query, state.catalog.facetValues, state.catalog.facetForms);
+  state.stated = new Set(Object.keys(state.constraints));
   state.asks = 0;
   state.shown = null;
   return evaluate(actor);
@@ -160,7 +166,8 @@ function renderChips() {
   for (const [facet, values] of Object.entries(state.constraints)) {
     const c = document.createElement('span');
     c.className = 'chip';
-    c.innerHTML = `<b>${facet}</b> ${values.join(' / ')}`;
+    const how = state.stated.has(facet) ? 'you said' : 'you chose';
+    c.innerHTML = `<b>${facet}</b> ${values.join(' / ')} <i style="font-style:normal;opacity:.6;font-size:11px">${how}</i>`;
     const x = document.createElement('button');
     x.type = 'button';
     x.textContent = '×';
