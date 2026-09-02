@@ -159,3 +159,40 @@ stand-in-`modelContext` test of the tool surface run with `npm test`.
    relax buttons → 71 belts. Then `explain_ranking` on one product.
 6. **2:45–3:00** Close on the README benchmark table. "Zero servers, zero
    tokens, one question at the right moment."
+
+## Narration (word for word, ≈ 2 min 40 s at a calm pace)
+
+> This is Counterask, a menswear store built for the WebMCP Challenge.
+> Nine thousand nine hundred and one real products, and nothing runs on a
+> server: retrieval, parsing and the decision to ask all happen in the tab.
+>
+> Type "belt". Ninety-seven belts. The first one beats the tenth by five
+> percent. Any store would show you these. This one asks — what material —
+> because it can see that one answer clears forty of them. Click leather, and
+> it answers, and the panel on the right says why it stopped asking.
+>
+> Now say it the way a person would: "I'm looking for a leather belt, nothing
+> with a snap, not over fifty dollars." The store reads the budget, the
+> refusal, and the attribute out of the sentence. The chips show what it heard.
+> Priced items come first, and it tells the agent what still separates the
+> results — eleven buckle, one pull-on.
+>
+> Here is the same store driven by an agent through WebMCP. The person asks
+> for a wallet that isn't leather, under thirty dollars. The agent calls
+> search_products. The store returns a question instead of a list, and look at
+> the tool list: answer_question appeared, because the page is waiting. The
+> agent relays the question, the person answers, the agent calls
+> answer_question, and the tool is gone again. Then show_products puts the
+> pick on the grid — the person sees products, not a transcript.
+>
+> When nothing matches — linen suede belt under twelve dollars — the store
+> doesn't say "no results". It says what to give up: drop the material, and
+> seventy-one belts come back.
+>
+> Everything is measured. On eight hundred sentences written from real
+> product records, refusals inverted into requirements went from one hundred
+> percent to zero, broken budgets from thirty-one percent to zero, and Hit at
+> ten from point seven nine to point nine nine nine.
+>
+> Seven tools, one state machine, zero tokens. A store that asks back when
+> answering would be a guess.

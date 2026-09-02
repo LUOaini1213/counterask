@@ -259,7 +259,8 @@ a 0.54 MB download.
 
 ```bash
 python scripts/build_catalog.py --source /path/to/catalog.jsonl   # optional, output is committed
-python -m http.server 5173 --directory public
+python -m http.server 5173 --directory public                     # or: npm start, npx serve public
+npm test                                                          # parser cases, tool surface, both benchmarks
 ```
 
 Then open `http://localhost:5173` in **ChatGPT's in-app browser**, or Chrome
