@@ -89,6 +89,13 @@ clicking or calling land in the *same* function: one state machine, two
 surfaces, nothing that can drift between what a human sees and what an agent
 is told.
 
+None of this is about menswear. The parser reads whatever attribute
+vocabulary the catalog builder emits; the stopping policy reasons about
+evidence and pool size, not clothing; the tools describe a store, not a
+category. Swap the catalog and the same seven tools ask the right question
+about laptops, groceries or hotel rooms — and the "no results" recovery, the
+`understood` echo and the tool-that-appears-when-needed come with them.
+
 Concretely, in one session: "find me a wallet that's not leather, under $30"
 → the store returns 30 candidates and one question (*which category —
 wallets, card cases, money clips?*) → the agent asks the person → the person

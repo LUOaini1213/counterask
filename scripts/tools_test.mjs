@@ -50,14 +50,19 @@ const search = registry.get('search_products');
 assert.deepEqual(search.inputSchema.required, ['query']);
 assert.deepEqual(Object.keys(search.inputSchema.properties).sort(),
   ['attributes', 'budget_max', 'budget_min', 'exclude', 'no_preference', 'query', 'sort']);
-let r = await search.execute({ query: 'a leather belt', budget_max: 30, no_preference: ['origin'] });
-assert.equal(r.status, 'need_more_evidence');
+let wire = await search.execute({ query: 'a leather belt', budget_max: 30, no_preference: ['origin'] });
 assert.deepEqual(calls.at(-1), ['search', 'a leather belt', 'agent', { budget_max: 30, no_preference: ['origin'] }]);
+
+// On the wire, both conventions at once: MCP text content and the object.
+assert.equal(wire.content[0].type, 'text');
+assert.deepEqual(JSON.parse(wire.content[0].text), wire.structuredContent);
+let r = wire.structuredContent;
+assert.equal(r.status, 'need_more_evidence');
 
 // The question is open: the tool to close it now exists.
 assert.ok(registry.has('answer_question'), 'a question is open, so answer_question must be registered');
 const answer = registry.get('answer_question');
-r = await answer.execute({ values: ['leather', 'suede'] });
+r = (await answer.execute({ values: ['leather', 'suede'] })).structuredContent;
 assert.deepEqual(calls.at(-1), ['answer', ['leather', 'suede'], 'agent']);
 assert.equal(r.status, 'answer');
 assert.ok(!registry.has('answer_question'), 'answered, so answer_question must be gone again');
@@ -77,7 +82,7 @@ assert.deepEqual(calls.at(-1), ['refine', 'material', ['leather'], 'agent', 'req
 assert.ok(refine.inputSchema.properties.facet.enum.includes('kind'), 'the category tree is refinable');
 
 // The rest are pass-throughs.
-assert.deepEqual((await registry.get('list_attributes').execute({})).facets.material[0].value, 'leather');
+assert.deepEqual((await registry.get('list_attributes').execute({})).structuredContent.facets.material[0].value, 'leather');
 await registry.get('show_products').execute({ ids: ['a', 'b'] });
 assert.deepEqual(calls.at(-1), ['show', ['a', 'b']]);
 await registry.get('explain_ranking').execute({ id: 'a' });

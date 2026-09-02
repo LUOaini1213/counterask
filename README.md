@@ -44,6 +44,10 @@ two things:
   "note": "Answering now would be a guess. Put this question to the shopper, then call answer_question." }
 ```
 
+(On the wire each result is MCP-shaped: `content` carries that JSON as text,
+`structuredContent` carries the object, so a client following either
+convention reads the same thing.)
+
 The question is not a failure path. It is the store declining to guess on the
 shopper's behalf, and handing the agent the one question worth asking. And
 when the store *does* answer, it says what still separates the products it is

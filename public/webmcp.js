@@ -30,11 +30,19 @@ export function registerTools(api, onCall, ctx = context()) {
   let answerToolHandle = null;
 
   // Wrap every handler so the page's own activity log sees agent traffic.
+  //
+  // On the wire a result is MCP-shaped: `content` carries the JSON as text
+  // for a client that reads tool results the way MCP clients do, and
+  // `structuredContent` carries the object itself for one that takes JSON.
+  // Whichever convention the browser follows, the agent sees the same thing.
   const traced = (name, fn) => async (args) => {
     const result = await fn(args ?? {});
     await syncAnswerTool(result);
     onCall?.(name, result);
-    return result;
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result) }],
+      structuredContent: result,
+    };
   };
 
   // answer_question only exists while a question is on the table. An agent

@@ -29,7 +29,8 @@ export async function runScript(ctx, show, pause = (ms) => new Promise((r) => se
     const tool = ctx.tools.get(name);
     if (!tool) { show('note', `${name} is not registered right now — the page is not waiting for it.`); return null; }
     show('call', `${name}(${JSON.stringify(args)})`);
-    return tool.execute(args);
+    const wire = await tool.execute(args);
+    return wire?.structuredContent ?? wire;
   };
 
   show('note', `Tools on offer: ${names()}.`);
