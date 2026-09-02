@@ -145,7 +145,7 @@ function search(text, actor = 'agent', given = {}) {
   state.ignored = parsed.ignored;
   state.conflicts = parsed.conflicts;
   state.rejected = [];
-  state.declined = new Set();
+  state.declined = new Set(parsed.noPreference ?? []);
   state.asks = 0;
   state.shown = null;
   // Whatever the agent already knows arrives structured and wins over the
@@ -333,12 +333,17 @@ function snapshot(decision, extra = {}) {
   if (state.conflicts.length) understood.conflicts = state.conflicts;
   if (state.rejected.length) understood.rejected = state.rejected;
 
+  const caveats = [
+    ...state.conflicts.map((c) => `"${c.value}" was both required and refused (same ${c.facet} in this catalogue); the requirement was kept.`),
+    ...state.rejected.map((r) => `${r.facet}${r.value != null ? `=${r.value}` : ''} was ignored: ${r.reason}.`),
+  ];
   const base = {
     request: state.said,
     understood,
     questionsAsked: state.asks,
     candidates: pool.length,
     why: d.reasons ?? [],
+    ...(caveats.length ? { caveats } : {}),
     ...extra,
   };
   if (state.budget) {

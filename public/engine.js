@@ -26,7 +26,7 @@ const STOP = new Set([
   'one', 'ones', 'thing', 'things', 'stuff', 'kind', 'type', 'sort', 'option',
   'options', 'item', 'items', 'product', 'products', 'version',
   'what', 'whats', 'which', 'how', 'where', 'there', 'here', 'them', 'they',
-  'him', 'his', 'her', 'its', 'okay', 'yeah', 'thanks',
+  'him', 'his', 'her', 'its', 'okay', 'yeah', 'thanks', 'without', 'dont', 'don',
 ]);
 
 // Shoppers type plurals; catalogues are written in the singular, and vice
@@ -189,7 +189,39 @@ const ALSO = {
   },
 };
 
+// "Any material is fine", "fit doesn't matter": a facet the person has
+// waved through. Reported as no-preference so the store never asks about it
+// — a question about something the shopper just said they do not mind reads
+// as not listening, exactly like a question about something they stated.
+const FACET_WORDS = {
+  material: ['material', 'materials', 'fabric', 'fabrics'],
+  closure: ['closure', 'closures', 'fastening', 'fastener', 'fasteners'],
+  sleeve: ['sleeve length', 'sleeves', 'sleeve'],
+  fit: ['fit', 'cut'],
+  care: ['care instructions', 'washing', 'care'],
+  origin: ['origin', 'country of origin', "where it's made", 'where it is made'],
+  sole: ['sole', 'soles'],
+  occasion: ['occasion', 'occasions'],
+  pocket: ['pockets', 'pocket'],
+  kind: ['kind', 'category', 'type', 'style'],
+};
+const FACET_WORD = Object.entries(FACET_WORDS)
+  .flatMap(([facet, words]) => words.map((w) => [w, facet]))
+  .sort((a, b) => b[0].length - a[0].length);
+const WORD = `(${FACET_WORD.map(([w]) => escapeRe(w)).join('|')})`;
+const NOPREF = [
+  String.raw`\b(?:any|whatever|either)\s+(?:kind of\s+|sort of\s+|type of\s+)?WORD\s+(?:is fine|is ok|is okay|works|will do|would do|is good)\b`,
+  String.raw`\b(?:i )?(?:don't|dont|do not|doesn't|does not) (?:care|mind) (?:about |what |which |the )?(?:the )?WORD\b`,
+  String.raw`\b(?:the )?WORD (?:doesn't|doesnt|does not|don't|dont) matter\b`,
+  String.raw`\bno preference (?:on|for|about|regarding|as to) (?:the )?WORD\b`,
+  String.raw`\b(?:not (?:fussy|bothered|picky|particular)|open|flexible|easy) (?:about|on|regarding) (?:the )?WORD\b`,
+  String.raw`\b(?:any|whatever) WORD\b(?! of\b)`,
+].map((re) => new RegExp(re.replace('WORD', WORD), 'g'));
+
 const FILLER = [
+  // "I don't care about the brand": whatever the noun, the phrase is not a
+  // requirement. Facets are caught above, before this runs.
+  /\b(?:i )?(?:don't|dont|do not) (?:care|mind) (?:about |which |what )?(?:the )?[a-z]+\b/g,
   /\b(?:i'?m|i am|we'?re|we are)\s+(?:looking|searching|shopping|hunting)\s+for\b/g,
   /\b(?:looking|searching|shopping|hunting)\s+for\b/g,
   /\b(?:i|we)\s+(?:need|want|would like|'d like|am after|require|could use)\b/g,
@@ -224,9 +256,21 @@ export function parseRequest(text, catalog) {
   let s = ` ${(text || '').toLowerCase().replace(/\s+/g, ' ')} `;
   const out = {
     constraints: {}, exclude: {}, excludeTerms: [], budget: null, sort: 'relevance',
-    optional: [], ignored: [], conflicts: [],
+    optional: [], ignored: [], conflicts: [], noPreference: [],
   };
   const blank = (at, end) => { s = `${s.slice(0, at)}${' '.repeat(end - at)}${s.slice(end)}`; };
+
+  // What the person waved through, before anything else can read the words.
+  for (const re of NOPREF) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(s))) {
+      const facet = FACET_WORD.find(([w]) => w === m[1])?.[1];
+      if (facet && !out.noPreference.includes(facet)) out.noPreference.push(facet);
+      blank(m.index, m.index + m[0].length);
+      re.lastIndex = m.index + 1;
+    }
+  }
 
   // Budget first: "not over $50" is a ceiling, not a refusal.
   for (const [re, fn] of BUDGET_RULES) {
@@ -242,6 +286,19 @@ export function parseRequest(text, catalog) {
     out.sort = sort;
     blank(m.index, m.index + m[0].length);
     break;
+  }
+
+  // Settings, before refusals can read "for work" as words to ban. A
+  // negated setting ("not for work") is left for the refusal pass.
+  const hints = [];
+  for (const [re, hint] of CONTEXT) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(s))) {
+      if (/\b(?:not|no|never|isn't|aren't|nothing)\s+$/.test(s.slice(0, m.index))) continue;
+      blank(m.index, m.index + m[0].length);
+      if (!hints.includes(hint)) hints.push(hint);
+    }
   }
 
   // Refusals. A cue opens a window — two words for "no", which binds tightly
@@ -263,7 +320,9 @@ export function parseRequest(text, catalog) {
     if (cue[0] === 'no' && NO_FEATURE.has(first)) continue;  // no iron shirt
     const limit = cue[0] === 'no' ? 2 : 5;
     const stop = ext.search(/[,.;!?]|\s(?:and|but)\s/);
-    const win = (stop === -1 ? ext : ext.slice(0, stop)).split(' ').slice(0, limit).join(' ');
+    let win = (stop === -1 ? ext : ext.slice(0, stop)).split(' ').slice(0, limit).join(' ');
+    const clause = win.slice(1).search(/\s(?:for|to|so|because|since|as|when|if|while)\s/);
+    if (clause !== -1) win = win.slice(0, clause + 1);
 
     const hits = findForms(ext, catalog.facetValues, catalog.facetForms, ALSO)
       .filter((h) => h.at < win.length);
@@ -312,15 +371,12 @@ export function parseRequest(text, catalog) {
     if (left.length) out.exclude[facet] = left; else delete out.exclude[facet];
   }
 
-  for (const [re, hint] of CONTEXT) {
-    if (!re.test(s)) continue;
-    re.lastIndex = 0;
-    s = s.replace(re, ' ');
+  for (const re of FILLER) s = s.replace(re, ' ');
+
+  for (const hint of hints) {
     s += ` ${hint}`;
     for (const t of tokenize(hint)) if (!out.optional.includes(t)) out.optional.push(t);
   }
-
-  for (const re of FILLER) s = s.replace(re, ' ');
 
   out.query = s.replace(/ +/g, ' ').replace(/( *[,;] *)+/g, ', ')
     .replace(/^[ ,]+|[ ,]+$/g, '');

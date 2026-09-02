@@ -66,6 +66,17 @@ const CASES = [
   ['I want something for the gym, not polyester', { constraints: { occasion: ['athletic'] }, exclude: { material: ['polyester'] }, has: ['gym'] }],
   ['not made in the usa, a fleece', { exclude: { origin: ['made in usa'] }, excludeTerms: [], constraints: { material: ['fleece'] } }],
   ["Don't Run Out Of Steam sneaker", { exclude: {}, excludeTerms: [] }],
+  ['a belt, any material is fine', { noPreference: ['material'], constraints: {}, has: ['belt'], lacks: ['material', 'fine'] }],
+  ["running shoes, I don't care about the brand", { noPreference: [], exclude: {}, excludeTerms: [], lacks: ['brand', 'care'] }],
+  ["dress shirt, fit doesn't matter", { noPreference: ['fit'], constraints: { occasion: ['formal'] }, lacks: ['matter'] }],
+  ['wallet, no preference on material, under $20', { noPreference: ['material'], budget: { min: null, max: 20 } }],
+  ['sweater, whatever fabric works', { noPreference: ['material'] }],
+  ["I don't mind the closure, a leather belt", { noPreference: ['closure'], constraints: { material: ['leather'] }, exclude: {} }],
+  ['any kind of jacket, not fussy about the sleeves', { noPreference: ['sleeve'], has: ['jacket'] }],
+  ['work boots, avoid athletic for work', { exclude: { occasion: ['athletic'] }, bansNot: ['work'], constraints: { occasion: ['outdoor'] } }],
+  ['boots, no laces to tie', { exclude: { closure: ['lace-up'] }, excludeTerms: ['lace'], bansNot: ['tie'] }],
+  ['a shirt for work, not polyester', { exclude: { material: ['polyester'] }, optional: ['business', 'formal', 'office'], lacks: ['work'] }],
+  ['shoes, not for work', { excludeTerms: ['work'], optional: [] }],
 ];
 
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -83,11 +94,13 @@ for (const [text, want] of CASES) {
       for (const w of expect) if (q.includes(` ${w} `) || q.includes(` ${w},`)) problems.push(`query still has "${w}" (query: "${got.query}")`);
     } else if (key === 'constraints' || key === 'exclude') {
       if (!eq(sortedObj(got[key]), sortedObj(expect))) problems.push(`${key} ${JSON.stringify(got[key])} ≠ ${JSON.stringify(expect)}`);
-    } else if (key === 'excludeTerms' || key === 'optional' || key === 'ignored') {
+    } else if (key === 'excludeTerms' || key === 'optional' || key === 'ignored' || key === 'noPreference') {
       const g = [...got[key]].sort();
       const e = [...expect].sort();
       const ok = key === 'excludeTerms' && expect.length ? expect.every((w) => g.includes(w)) : eq(g, e);
       if (!ok) problems.push(`${key} ${JSON.stringify(got[key])} ≠ ${JSON.stringify(expect)}`);
+    } else if (key === 'bansNot') {
+      for (const w of expect) if (got.excludeTerms.includes(w)) problems.push(`"${w}" must not be banned (excludeTerms: ${JSON.stringify(got.excludeTerms)})`);
     } else if (key === 'conflicts') {
       if (!eq(got.conflicts, expect)) problems.push(`conflicts ${JSON.stringify(got.conflicts)} ≠ ${JSON.stringify(expect)}`);
     } else if (!eq(got[key], expect)) {

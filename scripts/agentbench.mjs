@@ -49,6 +49,11 @@ const NEGATED = [
   (q, form) => `${q}, anything but ${form}`,
   (q, form) => `${q}, and it shouldn't be ${form}`,
 ];
+const WAVED = [
+  (q, word) => `${q}, any ${word} is fine`,
+  (q, word) => `${q}, I don't care about the ${word}`,
+  (q, word) => `${q}, ${word} doesn't matter`,
+];
 const BUDGET = [
   (q, lo, hi) => `${q} under $${hi}`,
   (q, lo, hi) => `${q} for less than ${hi} dollars`,
@@ -83,6 +88,11 @@ const HOLDOUT = {
     (q, form) => `${q}, other than ${form}`,
     (q, form) => `${q}, definitely not ${form}`,
   ],
+  WAVED: [
+    (q, word) => `${q} — no preference on ${word}`,
+    (q, word) => `${q}, whatever ${word} works`,
+    (q, word) => `${q}, not fussy about the ${word}`,
+  ],
   BUDGET: [
     (q, lo, hi) => `${q}, max $${hi}`,
     (q, lo, hi) => `${q} for $${hi} or less`,
@@ -102,8 +112,8 @@ function compose(target, rng, T) {
   const core = queryFor(target, rng, cat);
   if (!core) return null;
   let q = core;
-  const truth = { stated: {}, excluded: null, budget: null };
-  const { FILLER, STATED, NEGATED, BUDGET } = T;
+  const truth = { stated: {}, excluded: null, budget: null, waved: null };
+  const { FILLER, STATED, NEGATED, BUDGET, WAVED } = T;
 
   // Up to two attributes the target carries, in the wording a person uses —
   // skipping any whose wording the core words already contain, so the
@@ -133,6 +143,16 @@ function compose(target, rng, T) {
     }
   }
 
+  // Sometimes a facet waved through — "any material is fine" — which the
+  // store must then never ask about.
+  if (rng() < 0.3) {
+    const WORDS = { material: 'material', closure: 'closure', sleeve: 'sleeve', fit: 'fit', care: 'care', origin: 'origin', sole: 'sole', occasion: 'occasion', pocket: 'pocket', kind: 'category' };
+    const open = Object.keys(WORDS).filter((f) => !truth.stated[f] && truth.excluded?.facet !== f);
+    const facet = pick(rng, open);
+    q = pick(rng, WAVED)(q, WORDS[facet]);
+    truth.waved = facet;
+  }
+
   // A budget the target fits inside, when it has a price at all.
   const p = typeof target.p === 'number' && target.p > 0 ? target.p : null;
   if (p && rng() < 0.5) {
@@ -158,12 +178,13 @@ const parse = engine.parseRequest
 
 export function agentBench({ n = 800, seed = 2026, maxAsks = 3, holdout = false } = {}) {
   const rng = mulberry32(seed);
-  const T = holdout ? HOLDOUT : { FILLER, STATED, NEGATED, BUDGET };
+  const T = holdout ? HOLDOUT : { FILLER, STATED, NEGATED, BUDGET, WAVED };
   const s = {
     n: 0, hit10: 0, hit1: 0, rrSum: 0, turnSum: 0, asked: 0,
     withNeg: 0, negViolated: 0, negInverted: 0,
     withBudget: 0, budgetViolated: 0,
     statedFacets: 0, statedFound: 0,
+    waved: 0, wavedMissed: 0,
     redundantAsks: 0, reasks: 0,
   };
   const misses = [];
@@ -188,12 +209,16 @@ export function agentBench({ n = 800, seed = 2026, maxAsks = 3, holdout = false 
     if (truth.excluded && constraints[truth.excluded.facet]?.includes(truth.excluded.value)) s.negInverted++;
 
     // Then the dialogue, with a shopper who answers from the target.
-    const declined = [];
+    const declined = [...(req.noPreference ?? [])];
+    if (truth.waved) {
+      s.waved++;
+      if (!declined.includes(truth.waved)) s.wavedMissed++;
+    }
     let asks = 0;
     for (;;) {
       const d = engine.decide(cat, scored, constraints, asks, { declined });
       if (d.action !== 'ask' || asks >= maxAsks) break;
-      if (truth.stated[d.facet] !== undefined) s.redundantAsks++;
+      if (truth.stated[d.facet] !== undefined || truth.waved === d.facet) s.redundantAsks++;
       if (declined.includes(d.facet)) s.reasks++;
       const value = answerAs(target, d.facet);
       asks++;
@@ -238,6 +263,7 @@ export function agentBench({ n = 800, seed = 2026, maxAsks = 3, holdout = false 
     },
     listening: {
       statedHeard: `${pct(s.statedFound, s.statedFacets)} of ${s.statedFacets}`,
+      wavedThroughHeard: `${pct(s.waved - s.wavedMissed, s.waved)} of ${s.waved}`,
       negationInverted: `${pct(s.negInverted, s.withNeg)} of ${s.withNeg}`,
       negationViolatedInTop10: `${pct(s.negViolated, s.withNeg)} of ${s.withNeg}`,
       budgetViolatedInTop10: `${pct(s.budgetViolated, s.withBudget)} of ${s.withBudget}`,
