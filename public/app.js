@@ -29,6 +29,7 @@ const state = {
   optional: [],         // query words the filter already guarantees
   ignored: [],          // query words no product carries
   conflicts: [],        // a refusal naming a value the request also requires
+  claims: [],           // which parser pass took which words, in order
   rejected: [],         // structured input this vocabulary does not have
   stated: new Set(),    // facets the shopper volunteered, vs ones we asked for
   declined: new Set(),  // facets the shopper said they do not mind
@@ -90,6 +91,7 @@ async function boot() {
     if (e.agentInvoked && typeof e.respondWith === 'function') e.respondWith(Promise.resolve(result));
   });
   renderCart();
+  if (new URLSearchParams(location.search).get('agent') !== 'demo') restore();
 
   const ok = registerTools(api, logCall, undefined, renderTools);
   el('mcpdot').classList.toggle('on', ok);
@@ -228,6 +230,7 @@ function renderCart() {
   } else {
     done.hidden = true;
   }
+  persist();
 }
 
 function showTurn(role, text) {
@@ -272,6 +275,7 @@ function search(text, actor = 'agent', given = {}) {
   state.optional = parsed.optional;
   state.ignored = parsed.ignored;
   state.conflicts = parsed.conflicts;
+  state.claims = parsed.claims ?? [];
   state.rejected = [];
   state.declined = new Set(parsed.noPreference ?? []);
   state.asks = 0;
@@ -364,12 +368,125 @@ function answerQuestion(values, actor = 'agent') {
 function reset(actor = 'agent') {
   Object.assign(state, {
     said: '', query: '', constraints: {}, exclude: {}, excludeTerms: [], budget: null,
-    sort: 'relevance', optional: [], ignored: [], conflicts: [], rejected: [],
+    sort: 'relevance', optional: [], ignored: [], conflicts: [], claims: [], rejected: [],
     stated: new Set(), declined: new Set(), asks: 0, pending: null, scored: [], shown: null,
   });
   el('q').value = '';
   render({ action: 'idle', reasons: ['Waiting for a search.'], pool: [] });
   return snapshot();
+}
+
+// A dry run: how the store would read a sentence, without searching or
+// changing anything. The agent can check a reading before acting on it, or
+// show the shopper what was heard. Borrowed from the cuizi-rewrite branch.
+function parseOnly(text) {
+  const parsed = parseRequest(text || '', state.catalog);
+  return {
+    status: 'reading',
+    request: (text || '').trim(),
+    query: parsed.query,
+    attributes: parsed.constraints,
+    exclude: parsed.exclude,
+    excludeWords: parsed.excludeTerms,
+    budget: parsed.budget,
+    sort: parsed.sort,
+    noPreference: parsed.noPreference,
+    ignoredWords: parsed.ignored,
+    conflicts: parsed.conflicts,
+    claims: parsed.claims,
+    note: 'Nothing was searched. Call search_products to act on this reading, or pass the parts you agree with as structured input.',
+  };
+}
+
+// "Actually, forget the leather": take back one or more things the shopper
+// said — a value, a facet name, a refused word, "budget", "sort" — and keep
+// the rest, including the cart. Borrowed from the cuizi-rewrite branch.
+function revise(drop = [], dropAll = false, actor = 'agent') {
+  if (dropAll) {
+    reset(actor);
+    return { ...snapshot(), dropped: ['everything'], note: 'The request was taken back. The cart is kept.' };
+  }
+  const cat = state.catalog;
+  const dropped = [];
+  const notFound = [];
+  const without = (list, v) => list.filter((x) => x !== v);
+  for (const raw of [].concat(drop ?? [])) {
+    const want = String(raw ?? '').trim().toLowerCase();
+    if (!want) continue;
+    let hit = false;
+    if (want === 'budget' || want === 'price') {
+      if (state.budget) { state.budget = null; hit = true; }
+    } else if (want === 'sort' || want === 'ordering' || want === 'order') {
+      if (state.sort !== 'relevance') { state.sort = 'relevance'; hit = true; }
+    } else if (cat.facetValues[want]) {
+      if (state.constraints[want]) { delete state.constraints[want]; hit = true; }
+      if (state.exclude[want]) { delete state.exclude[want]; hit = true; }
+      if (state.declined.delete(want)) hit = true;
+    } else {
+      for (const facet of Object.keys(cat.facetValues)) {
+        const v = canonical(facet, want);
+        if (!v) continue;
+        if (state.constraints[facet]?.includes(v)) {
+          state.constraints[facet] = without(state.constraints[facet], v);
+          if (!state.constraints[facet].length) delete state.constraints[facet];
+          hit = true;
+        }
+        if (state.exclude[facet]?.includes(v)) {
+          state.exclude[facet] = without(state.exclude[facet], v);
+          if (!state.exclude[facet].length) delete state.exclude[facet];
+          hit = true;
+        }
+      }
+      const tok = tokenize(want)[0];
+      if (tok && state.excludeTerms.includes(tok)) { state.excludeTerms = without(state.excludeTerms, tok); hit = true; }
+    }
+    (hit ? dropped : notFound).push(raw);
+  }
+  if (!dropped.length) {
+    return { ...snapshot(), dropped, notFound, note: 'Nothing in the current request matched what was to be dropped.' };
+  }
+  state.shown = null;
+  return evaluate(actor, { dropped, ...(notFound.length ? { notFound } : {}) });
+}
+
+// --- remembering the visit ------------------------------------------------
+//
+// A person who reloads should find their search, their open question and
+// their cart where they left them. Kept in localStorage, per browser; the
+// scripted demo starts clean. Borrowed from the cuizi-rewrite branch.
+
+const STORE_KEY = 'counterask.v1';
+
+function persist() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      said: state.said, query: state.query, constraints: state.constraints, exclude: state.exclude,
+      excludeTerms: state.excludeTerms, budget: state.budget, sort: state.sort, optional: state.optional,
+      ignored: state.ignored, conflicts: state.conflicts, claims: state.claims,
+      stated: [...state.stated], declined: [...state.declined], asks: state.asks,
+      cart: [...state.cart], order: state.order,
+    }));
+  } catch { /* storage may be unavailable; the page works without it */ }
+}
+
+function restore() {
+  let saved;
+  try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch { return false; }
+  if (!saved) return false;
+  const cat = state.catalog;
+  if (Array.isArray(saved.cart)) state.cart = new Map(saved.cart.filter(([id]) => cat.byId.has(id)));
+  if (saved.order) state.order = saved.order;
+  if (!saved.said) return false;
+  Object.assign(state, {
+    said: saved.said, query: saved.query ?? '', constraints: saved.constraints ?? {}, exclude: saved.exclude ?? {},
+    excludeTerms: saved.excludeTerms ?? [], budget: saved.budget ?? null, sort: saved.sort ?? 'relevance',
+    optional: saved.optional ?? [], ignored: saved.ignored ?? [], conflicts: saved.conflicts ?? [],
+    claims: saved.claims ?? [], stated: new Set(saved.stated ?? []), declined: new Set(saved.declined ?? []),
+    asks: saved.asks ?? 0, rejected: [], shown: null,
+  });
+  el('q').value = state.said;
+  evaluate('human', { resumed: 'from your last visit' });
+  return true;
 }
 
 function evaluate(actor, extra = {}) {
@@ -552,6 +669,7 @@ function render(decision, extra = {}) {
   renderAsk(decision);
   renderGrid(decision);
   renderTrace(decision, extra);
+  persist();
 }
 
 function renderChips() {
@@ -702,9 +820,12 @@ function renderTrace(d, extra) {
   if (state.declined.size) k('any', [...state.declined].join('  '));
   if (state.ignored.length) k('ignored', state.ignored.join('  '));
   for (const c of state.conflicts) k('conflict', `"${c.value}" both required and refused — kept`);
+  for (const c of state.claims ?? []) k('read', `${c.pass} took "${c.said}"${c.as ? ` → ${c.as}` : ''}`);
   k('candidates', String(d.pool?.length ?? 0));
   k('asked', `${state.asks} / ${POLICY.maxAsks}`);
   if (extra.skipped) k('skipped', extra.skipped);
+  if (extra.dropped) k('dropped', [].concat(extra.dropped).join('  '));
+  if (extra.resumed) k('resumed', extra.resumed);
   lines.push('');
   lines.push(`<span class="v">decision → ${d.action}</span>`);
   for (const r of d.reasons ?? []) lines.push(`  · ${esc(r)}`);
@@ -741,7 +862,7 @@ function formatCount(n) {
 // --- the surface WebMCP tools drive ------------------------------------
 
 const api = {
-  search, refine, answerQuestion, reset, snapshot,
+  search, refine, answerQuestion, reset, snapshot, parseOnly, revise,
   addToCart, removeFromCart, cart: () => cartSnapshot(),
   get state() { return state; },
   showProducts(ids) {

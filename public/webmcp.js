@@ -185,6 +185,41 @@ export function registerTools(api, onCall, ctx = context(), onTools = null) {
       execute: traced('refine_search', ({ facet, values, mode }) => api.refine(facet, values, 'agent', mode ?? 'require')),
     },
     {
+      name: 'parse_only',
+      title: 'See how the store would read a sentence',
+      description:
+        'A dry run: how the store would read the shopper\'s words — what it takes as a '
+        + 'requirement, a refusal, a budget, an ordering, a facet waved through, and what it '
+        + 'ignores — with which pass claimed which words, in order. Nothing is searched or '
+        + 'changed. Use it to check a reading before acting on it, or to show the shopper what '
+        + 'was heard.',
+      inputSchema: {
+        type: 'object',
+        properties: { query: { type: 'string', description: 'The request, verbatim.' } },
+        required: ['query'],
+      },
+      annotations: { readOnlyHint: true },
+      execute: traced('parse_only', async ({ query }) => api.parseOnly(query)),
+    },
+    {
+      name: 'revise_search',
+      title: 'Take something back',
+      description:
+        'The shopper changed their mind. Drop one or more things they had said — an attribute '
+        + 'value ("leather"), a facet name ("material", which also forgets a no-preference), a '
+        + 'refused word, "budget" or "sort" — and keep the rest, including the cart. Pass '
+        + 'drop_all to take the whole request back. The result says what was dropped and what '
+        + 'was not found, so you can tell the shopper it heard them.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          drop: { type: 'array', items: { type: 'string' }, description: 'Values, facet names, refused words, "budget" or "sort".' },
+          drop_all: { type: 'boolean', description: 'Take the whole request back; the cart is kept.' },
+        },
+      },
+      execute: traced('revise_search', ({ drop, drop_all }) => api.revise(drop ?? [], Boolean(drop_all), 'agent')),
+    },
+    {
       name: 'list_attributes',
       title: 'The catalog\'s attribute vocabulary',
       description:

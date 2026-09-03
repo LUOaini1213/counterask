@@ -256,11 +256,21 @@ export function parseRequest(text, catalog) {
   let s = ` ${(text || '').toLowerCase().replace(/\s+/g, ' ')} `;
   const out = {
     constraints: {}, exclude: {}, excludeTerms: [], budget: null, sort: 'relevance',
-    optional: [], ignored: [], conflicts: [], noPreference: [],
+    optional: [], ignored: [], conflicts: [], noPreference: [], claims: [],
   };
-  const blank = (at, end) => { s = `${s.slice(0, at)}${' '.repeat(end - at)}${s.slice(end)}`; };
+  // Every span a pass takes is recorded with the words it took, so the
+  // reading can be audited: "budget took 'under $40', refusal took 'not
+  // leather'". Idea borrowed from the parallel implementation on the
+  // cuizi-rewrite branch.
+  let pass = 'budget';
+  const blank = (at, end) => {
+    const said = s.slice(at, end).replace(/\s+/g, ' ').trim();
+    if (said) out.claims.push({ pass, said });
+    s = `${s.slice(0, at)}${' '.repeat(end - at)}${s.slice(end)}`;
+  };
 
   // What the person waved through, before anything else can read the words.
+  pass = 'no preference';
   for (const re of NOPREF) {
     re.lastIndex = 0;
     let m;
@@ -280,6 +290,7 @@ export function parseRequest(text, catalog) {
     blank(m.index, m.index + m[0].length);
     break;
   }
+  pass = 'ordering';
   for (const [re, sort] of SORT_RULES) {
     const m = re.exec(s);
     if (!m) continue;
@@ -290,6 +301,7 @@ export function parseRequest(text, catalog) {
 
   // Settings, before refusals can read "for work" as words to ban. A
   // negated setting ("not for work") is left for the refusal pass.
+  pass = 'setting';
   const hints = [];
   for (const [re, hint] of CONTEXT) {
     re.lastIndex = 0;
@@ -303,11 +315,12 @@ export function parseRequest(text, catalog) {
 
   // Refusals. A cue opens a window — two words for "no", which binds tightly
   // ("no laces, leather"), five for "not" and "without", which take a phrase
-  // — closed early by punctuation or by "and"/"but". A facet value spelled
+  // — closed early by punctuation, a dash, "and"/"but", or the next cue. A facet value spelled
   // out inside it is excluded; every other word in it is banned from titles,
   // which is what makes "not nike" and "no hood" work with no vocabulary at
   // all. A multi-word value that starts inside the window is taken whole, so
   // "no big and tall" is not cut at its own "and".
+  pass = 'refusal';
   NEG_CUE.lastIndex = 0;
   let cue;
   while ((cue = NEG_CUE.exec(s))) {
@@ -319,7 +332,7 @@ export function parseRequest(text, catalog) {
     const first = ext.split(' ')[0] ?? '';
     if (cue[0] === 'no' && NO_FEATURE.has(first)) continue;  // no iron shirt
     const limit = cue[0] === 'no' ? 2 : 5;
-    const stop = ext.search(/[,.;!?]|\s(?:and|but)\s/);
+    const stop = ext.search(/[,.;!?—–]|\s-\s|\s(?:and|(?<!anything\s)but)\s|\s(?:not|no|nothing|without|except|excepting|excluding|avoid|avoiding|never|minus|sans|skip|leave|anything|other|rather|instead|don't|dont|doesn't|doesnt|shouldn't|shouldnt|can't|cant|cannot|mustn't|isn't|aren't|isnt|arent|wouldn't|wouldnt)\s/);
     let win = (stop === -1 ? ext : ext.slice(0, stop)).split(' ').slice(0, limit).join(' ');
     const clause = win.slice(1).search(/\s(?:for|to|so|because|since|as|when|if|while)\s/);
     if (clause !== -1) win = win.slice(0, clause + 1);
@@ -358,6 +371,7 @@ export function parseRequest(text, catalog) {
   for (const h of findForms(s, catalog.facetValues, catalog.facetForms)) {
     const list = (out.constraints[h.facet] ??= []);
     if (!list.includes(h.value)) list.push(h.value);
+    out.claims.push({ pass: 'stated', said: s.slice(h.at, h.end).trim(), as: `${h.facet} = ${h.value}` });
     for (const t of tokenize(s.slice(h.at, h.end))) if (!out.optional.includes(t)) out.optional.push(t);
   }
 
@@ -814,13 +828,20 @@ export function decide(catalog, scored, constraints, asksSoFar = 0, { declined =
 
   // Evidence is thin. Find the question that would separate the pool most.
   let best = null;
+  const thin = [];
   for (const facet of catalog.meta.facets) {
     // Known already, or declined already. "No preference" used to be
     // forgotten the moment it was clicked, and the same question came
     // straight back: 12 re-asks in 800 simulated sessions.
     if (constraints[facet] || declined.includes(facet)) continue;
     const { gain, coverage, counts } = splitValue(pool, facet);
-    if (coverage < POLICY.minCoverage) continue;
+    if (coverage < POLICY.minCoverage) {
+      // Too thinly recorded to ask about — but say so when it would
+      // otherwise have looked like the strongest question, so the reader
+      // sees why the store did not ask what they might expect.
+      if (counts.size >= 2 && coverage > 0) thin.push({ facet, coverage });
+      continue;
+    }
     // Rank candidate questions by candidates removed, not by share removed.
     const removed = gain * pool.length;
     if (!best || removed > best.removed) best = { facet, gain, coverage, counts, removed };
@@ -851,6 +872,9 @@ export function decide(catalog, scored, constraints, asksSoFar = 0, { declined =
     `Asking "${best.facet}" clears ~${Math.round(best.removed)} of them on average `
       + `(recorded on ${(best.coverage * 100).toFixed(0)}%).`,
   );
+  for (const t of thin.slice(0, 2)) {
+    reasons.push(`Not asking "${t.facet}": recorded on only ${(t.coverage * 100).toFixed(0)}% of these — it would remove products for having no data, not for failing.`);
+  }
 
   // What the four options leave out: candidates recorded under some other
   // value, and candidates with no value recorded at all. The first is an

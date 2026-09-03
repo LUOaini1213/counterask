@@ -168,6 +168,8 @@ The store never asks about anything it has been told.
 | `search_products` | The request in the shopper's words, plus anything already known, structured. Returns products **or** a question. |
 | `answer_question` | *Registered only while a question is open.* One or more option values, or `no_preference` — which is remembered. |
 | `refine_search` | Add one requirement or one refusal mid-conversation. |
+| `revise_search` | Take something back — a value, a facet, a refused word, the budget, the sort — and keep the rest. |
+| `parse_only` | A dry run: how a sentence would be read, with which pass claimed which words. Nothing searched. *read-only* |
 | `list_attributes` | The vocabulary this catalog actually carries, with counts. *read-only* |
 | `show_products` | Replace the grid with ids the agent picked, in its order. |
 | `explain_ranking` | Which words matched, whether the whole request matched, demand signal, policy state. *read-only* |
@@ -274,6 +276,11 @@ Two benchmarks, both self-supervised from the product records, both seeded:
   Hit@10 0.998 · Hit@1 0.899 · MRR 0.937, still zero failures.
 - [`scripts/parse_test.mjs`](scripts/parse_test.mjs) — 56 hand-written
   sentences with what the parser must and must not take from each.
+- [`scripts/fuzz.mjs`](scripts/fuzz.mjs) — 4,000 sentences nobody wrote,
+  built from fragments of every pass in random order: the parser must never
+  throw and a refusal must never come back as a requirement. Its first run
+  found 32 sentences where one refusal's window swallowed the next cue's
+  words; that is fixed, and the run is part of `npm test`.
 - [`scripts/tools_test.mjs`](scripts/tools_test.mjs) — the WebMCP surface
   against a stand-in `modelContext`, including `answer_question` appearing and
   disappearing on cue.
@@ -355,6 +362,16 @@ client. Prices exist for one product in five; a budget excludes what is priced
 outside it and keeps what is unpriced, ranked after. There is no ranking model
 and no training: demand is proxied by log-scaled review volume, because a
 frozen catalog has no click log.
+
+## A parallel implementation
+
+Teammate Cui Zixuan (`cuizhi-chat`) built an independent implementation of
+the same design on the [`cuizi-rewrite`](../../tree/cuizi-rewrite) branch —
+its own parser, policy, tests and a self-contained single-file build. Four of
+its ideas were folded back into this tree: the `parse_only` dry run with a
+per-pass audit of the reading, `revise_search` for a shopper who changes
+their mind, remembering the visit across reloads, and a fuzzer. The branch is
+kept as it was.
 
 ## License
 

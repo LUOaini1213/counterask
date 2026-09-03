@@ -33,6 +33,8 @@ const api = {
   reset(actor) { calls.push(['reset', actor]); return { status: 'answer', products: [] }; },
   showProducts(ids) { calls.push(['show', ids]); return { status: 'answer', products: [] }; },
   explain(id) { calls.push(['explain', id]); return { id }; },
+  parseOnly(query) { calls.push(['parse', query]); return { status: 'reading', query }; },
+  revise(drop, all, actor) { calls.push(['revise', drop, all, actor]); return { status: 'answer', products: [], dropped: drop }; },
   addToCart(id, qty) { calls.push(['add', id, qty]); return { status: 'cart', items: [{ id, quantity: qty }], total: 0 }; },
   removeFromCart(id) { calls.push(['remove', id]); return { status: 'cart', items: [], total: 0 }; },
   cart() { return { status: 'cart', items: [], total: 0 }; },
@@ -45,7 +47,7 @@ const seen = [];
 assert.equal(registerTools(api, (name, result) => log.push([name, result.status]), ctx, (names) => seen.push(names)), true);
 await new Promise((r) => setTimeout(r, 0));   // registrations are asynchronous
 
-const STATIC = ['add_to_cart', 'explain_ranking', 'list_attributes', 'refine_search', 'remove_from_cart', 'reset_search', 'search_products', 'show_products', 'view_cart'];
+const STATIC = ['add_to_cart', 'explain_ranking', 'list_attributes', 'parse_only', 'refine_search', 'remove_from_cart', 'reset_search', 'revise_search', 'search_products', 'show_products', 'view_cart'];
 assert.deepEqual((await listTools(ctx)).sort(), STATIC);
 assert.ok(!ctx.tools.has('answer_question'), 'no question is open, so answer_question must not exist yet');
 assert.ok(seen.length >= 1 && seen.at(-1).length === STATIC.length, 'the page was told the tool names');
@@ -55,6 +57,15 @@ for (const t of await ctx.getTools()) assert.ok(t.title, `${t.name} has no title
 assert.equal(ctx.tools.get('list_attributes').annotations.readOnlyHint, true);
 assert.equal(ctx.tools.get('explain_ranking').annotations.readOnlyHint, true);
 assert.equal(ctx.tools.get('view_cart').annotations.readOnlyHint, true);
+assert.equal(ctx.tools.get('parse_only').annotations.readOnlyHint, true);
+
+// A dry run reads without searching; a revision drops what it is told.
+assert.equal((await ctx.tools.get('parse_only').execute({ query: 'not leather' })).structuredContent.status, 'reading');
+assert.deepEqual(calls.at(-1), ['parse', 'not leather']);
+await ctx.tools.get('revise_search').execute({ drop: ['leather', 'budget'] });
+assert.deepEqual(calls.at(-1), ['revise', ['leather', 'budget'], false, 'agent']);
+await ctx.tools.get('revise_search').execute({ drop_all: true });
+assert.deepEqual(calls.at(-1), ['revise', [], true, 'agent']);
 
 // Structured input travels with the query, untouched.
 const search = ctx.tools.get('search_products');
