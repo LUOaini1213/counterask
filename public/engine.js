@@ -892,6 +892,14 @@ export const POLICY = {
   minCoverage: 0.45,
   // Never ask more than this many times in one session.
   maxAsks: 3,
+  // Value the strongest few questions by what they set up as well as what
+  // they remove now. Built, measured (scripts/ab_lookahead.mjs, 800 targets,
+  // oracle and menu-only shoppers) and left off: it saves 0.01 of a
+  // question per session and moves Hit@1 by one or two targets in either
+  // direction. The myopic choice is already the right question nearly
+  // every time on this catalogue; there is little to set up.
+  lookahead: 0,
+  lookaheadWidth: 4,
 };
 
 /**
@@ -924,27 +932,8 @@ export function decide(catalog, scored, constraints, asksSoFar = 0, { declined =
   }
 
   // Evidence is thin. Find the question that would separate the pool most.
-  let best = null;
   const thin = [];
-  for (const facet of catalog.meta.facets) {
-    // Known already, or declined already. "No preference" used to be
-    // forgotten the moment it was clicked, and the same question came
-    // straight back: 12 re-asks in 800 simulated sessions.
-    if (declined.includes(facet)) continue;
-    // A chosen category can be asked about again, one level deeper.
-    if (constraints[facet] && facet !== 'kind') continue;
-    const { gain, coverage, counts, level = null, ancestor = null } = splitValue(pool, facet);
-    if (coverage < POLICY.minCoverage) {
-      // Too thinly recorded to ask about — but say so when it would
-      // otherwise have looked like the strongest question, so the reader
-      // sees why the store did not ask what they might expect.
-      if (counts.size >= 2 && coverage > 0) thin.push({ facet, coverage });
-      continue;
-    }
-    // Rank candidate questions by candidates removed, not by share removed.
-    const removed = gain * pool.length;
-    if (!best || removed > best.removed) best = { facet, gain, coverage, counts, removed, level, ancestor };
-  }
+  const best = bestQuestion(catalog, pool, constraints, declined, { thin });
 
   if (!best || best.removed < POLICY.minRemoved || best.gain < POLICY.minGain) {
     reasons.push(best
@@ -969,7 +958,8 @@ export function decide(catalog, scored, constraints, asksSoFar = 0, { declined =
   reasons.push(
     `${pool.length} candidates, leader only ${(sep * 100).toFixed(0)}% ahead.`,
     `Asking "${best.facet}" clears ~${Math.round(best.removed)} of them on average `
-      + `(recorded on ${(best.coverage * 100).toFixed(0)}%).`,
+      + `(recorded on ${(best.coverage * 100).toFixed(0)}%)`
+      + (best.followUp > 0 ? `, and sets up a follow-up worth ~${Math.round(best.followUp)} more.` : '.'),
   );
   for (const t of thin.slice(0, 2)) {
     reasons.push(`Not asking "${t.facet}": recorded on only ${(t.coverage * 100).toFixed(0)}% of these — it would remove products for having no data, not for failing.`);
@@ -1002,6 +992,76 @@ export function decide(catalog, scored, constraints, asksSoFar = 0, { declined =
     ancestor: best.ancestor ?? null,
     question: phrase(best.facet, options, best),
   };
+}
+
+// The question worth asking of this pool, if any: the facet whose answer is
+// expected to remove the most candidates, subject to the coverage gate.
+//
+// With POLICY.lookahead on, the strongest few candidates are valued by what
+// they remove now plus what the best follow-up question would remove from
+// what each answer leaves — so a question that sets up a second good
+// question can beat one that only narrows a little more now. The gates that
+// decide whether to ask at all still look at the first step alone.
+function bestQuestion(catalog, pool, constraints, declined, { lookahead = POLICY.lookahead, thin = null } = {}) {
+  const candidates = [];
+  for (const facet of catalog.meta.facets) {
+    // Known already, or declined already. "No preference" used to be
+    // forgotten the moment it was clicked, and the same question came
+    // straight back: 12 re-asks in 800 simulated sessions.
+    if (declined.includes(facet)) continue;
+    // A chosen category can be asked about again, one level deeper.
+    if (constraints[facet] && facet !== 'kind') continue;
+    const { gain, coverage, counts, level = null, ancestor = null } = splitValue(pool, facet);
+    if (coverage < POLICY.minCoverage) {
+      // Too thinly recorded to ask about — but say so when it would
+      // otherwise have looked like the strongest question, so the reader
+      // sees why the store did not ask what they might expect.
+      if (thin && counts.size >= 2 && coverage > 0) thin.push({ facet, coverage });
+      continue;
+    }
+    // Rank candidate questions by candidates removed, not by share removed.
+    const removed = gain * pool.length;
+    candidates.push({ facet, gain, coverage, counts, removed, level, ancestor, followUp: 0 });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.removed - a.removed);
+  if (!lookahead || pool.length <= POLICY.answerBelow) return candidates[0];
+  let top = null;
+  for (const c of candidates.slice(0, POLICY.lookaheadWidth)) {
+    c.followUp = expectedFollowUp(catalog, pool, constraints, declined, c);
+    const value = c.removed + c.followUp;
+    if (!top || value > top.value) top = { ...c, value };
+  }
+  return top;
+}
+
+// What the best next question would remove, on average, from what this one
+// leaves: over each answer the shopper might give, weighted by how many
+// candidates give it, plus the shopper who has no such preference at all.
+function expectedFollowUp(catalog, pool, constraints, declined, q) {
+  const { facet, level } = q;
+  const inBucket = (it, v) => {
+    const vals = it.f[facet];
+    if (!vals?.length) return false;
+    if (facet !== 'kind') return vals.includes(v);
+    return level === 'leaf' ? vals[vals.length - 1] === v : vals[level] === v;
+  };
+  const worth = (next) => (next && next.removed >= POLICY.minRemoved && next.gain >= POLICY.minGain ? next.removed : 0);
+  let total = 0;
+  for (const c of q.counts.values()) total += c;
+  let expected = 0;
+  for (const [v, c] of q.counts) {
+    const sub = pool.filter((it) => inBucket(it, v));
+    if (sub.length <= POLICY.answerBelow) continue;
+    const next = bestQuestion(catalog, sub, { ...constraints, [facet]: [v] }, declined, { lookahead: 0 });
+    expected += q.coverage * (c / total) * worth(next);
+  }
+  const none = 1 - q.coverage;
+  if (none > 0) {
+    const next = bestQuestion(catalog, pool, constraints, [...declined, facet], { lookahead: 0 });
+    expected += none * worth(next);
+  }
+  return expected;
 }
 
 // What still separates the products the shopper is about to see.

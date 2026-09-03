@@ -288,6 +288,14 @@ replaced: keyword Hit@1 +0.005, Hit@10 −0.001, agent sentences flat — a
 wash, kept for the questions it produces and because an agent can now
 filter by a parent node ("shoes") as well as a leaf.
 
+*One step of lookahead was built and is off.* Valuing the strongest few
+questions by what they remove now plus what the best follow-up would
+remove from what each answer leaves (`POLICY.lookahead`) saves about
+0.01 of a question per session and moves Hit@1 by one or two targets in
+either direction, on both benchmarks and both shoppers
+(`npm run ab:lookahead`). The myopic choice is already the right question
+nearly every time on this catalogue; there is little to set up.
+
 What the built-in examples do:
 
 | Query | Read as | Candidates | Decision |
