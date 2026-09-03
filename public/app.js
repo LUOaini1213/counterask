@@ -1,780 +1,838 @@
-// Counterask storefront.
-//
-// One state machine drives both surfaces. A person clicking an answer chip and
-// an agent calling answer_question land in exactly the same function, so the
-// page can never tell them apart and can never drift between them.
-
-import { Catalog, decide, parseRequest, tokenize, POLICY } from './engine.js';
-import { registerTools } from './webmcp.js';
-import { standInContext, runScript } from './demo.js';
-
-const el = (id) => document.getElementById(id);
-
-const SORTS = ['relevance', 'price_asc', 'price_desc', 'rating', 'popular'];
-const SORT_LABEL = {
-  relevance: 'relevance', price_asc: 'cheapest first', price_desc: 'priciest first',
-  rating: 'best rated', popular: 'most reviewed',
-};
-
-const state = {
-  catalog: null,
-  vocab: null,          // facet -> [{ value, count }], computed once
-  said: '',             // what was typed or passed, verbatim
-  query: '',            // the product description left after parsing
-  constraints: {},      // facet -> [values] the shopper requires
-  exclude: {},          // facet -> [values] the shopper refused
-  excludeTerms: [],     // words the shopper refused outright
-  budget: null,         // { min, max } or null
-  sort: 'relevance',
-  optional: [],         // query words the filter already guarantees
-  ignored: [],          // query words no product carries
-  conflicts: [],        // a refusal naming a value the request also requires
-  rejected: [],         // structured input this vocabulary does not have
-  stated: new Set(),    // facets the shopper volunteered, vs ones we asked for
-  declined: new Set(),  // facets the shopper said they do not mind
-  asks: 0,
-  pending: null,        // the question currently on screen
-  scored: [],
-  shown: null,          // explicit id list when an agent curates the grid
-  cart: new Map(),      // id -> quantity
-  order: null,          // the last order placed, by the person
-};
-
-// The box parses sentences too, not just the tools. These show it.
-const EXAMPLES = [
-  'belt',
-  'leather belt',
-  'running shoes',
-  'waterproof hiking boots, no laces',
-  'a wallet that is not leather, under $30',
-  'cheapest wool sweater',
-];
-
-// --- boot ---------------------------------------------------------------
-
-async function boot() {
-  const res = await fetch('./data/catalog.json');
-  const payload = await res.json();
-  state.catalog = new Catalog(payload);
-  state.vocab = countVocab(state.catalog);
-
-  el('examples').innerHTML = '';
-  for (const q of EXAMPLES) {
-    const b = document.createElement('button');
-    b.textContent = q;
-    b.addEventListener('click', () => { el('q').value = q; search(q, 'human'); });
-    el('examples').append(b);
-  }
-
-  el('go').addEventListener('click', () => search(el('q').value, 'human'));
-  el('q').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.keyCode === 13) search(el('q').value, 'human'); });
-  el('clear').addEventListener('click', () => reset('human'));
-
-  // A person adds from the card; an agent calls add_to_cart. Same function.
-  el('grid').addEventListener('click', (e) => {
-    const b = e.target.closest('button.add');
-    if (b) addToCart(b.dataset.id, 1, 'human');
-  });
-  el('cartItems').addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-remove]');
-    if (b) removeFromCart(b.dataset.remove, 'human');
-  });
-
-  // The checkout form is a declarative WebMCP tool (see index.html). Whether a
-  // person filled it or the browser did on an agent's behalf, the submit is
-  // the person's press, and this handler is the one place an order is placed.
-  el('checkout').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const data = new FormData(e.target);
-    const result = placeOrder({ name: data.get('name'), address: data.get('address') });
-    if (e.agentInvoked && typeof e.respondWith === 'function') e.respondWith(Promise.resolve(result));
-  });
-  renderCart();
-
-  const ok = registerTools(api, logCall, undefined, renderTools);
-  el('mcpdot').classList.toggle('on', ok);
-  el('mcpstate').textContent = ok ? 'WebMCP tools registered' : 'WebMCP not available in this browser';
-
-  // No WebMCP here: offer the scripted agent instead, and start it straight
-  // away when the page was opened with ?agent=demo.
-  if (!ok) {
-    el('demoBtn').hidden = false;
-    el('demoBtn').addEventListener('click', startDemo);
-    if (new URLSearchParams(location.search).get('agent') === 'demo') startDemo();
-  }
-}
-
-let demoRunning = false;
-async function startDemo() {
-  if (demoRunning) return;
-  demoRunning = true;
-  el('demoBtn').disabled = true;
-  reset('human');
-  el('convo').innerHTML = '';
-  el('convoPanel').hidden = false;
-  el('mcpstate').textContent = 'Scripted agent running — a simulation, WebMCP is not available in this browser';
-  const ctx = standInContext();
-  registerTools(api, logCall, ctx, renderTools);
-  await new Promise((r) => setTimeout(r, 0));
-  try {
-    await runScript(ctx, showTurn, undefined, { fillCheckout });
-  } finally {
-    demoRunning = false;
-    el('demoBtn').disabled = false;
-    el('demoBtn').textContent = 'Run the scripted agent again';
-    el('mcpstate').textContent = 'Scripted agent finished — a simulation, WebMCP is not available in this browser';
-  }
-}
-
-// The tool list as the page sees it, from getTools() and the toolchange
-// event: a person can watch answer_question come and go.
-function renderTools(names) {
-  const line = el('toolsNow');
-  if (!names?.length) { line.hidden = true; return; }
-  line.hidden = false;
-  line.innerHTML = `<b>on offer now</b> ${names.map((n) => `<code class="${n === 'answer_question' ? 'hot' : ''}">${esc(n)}</code>`).join(' ')}`;
-}
-
-// --- the cart, and the one move an agent cannot make ---------------------
-
-function cartLines() {
-  const lines = [];
-  for (const [id, quantity] of state.cart) {
-    const it = state.catalog.byId.get(id);
-    if (!it) continue;
-    const price = typeof it.p === 'number' ? it.p : null;
-    lines.push({ id, title: it.t, quantity, price, lineTotal: price != null ? +(price * quantity).toFixed(2) : null });
-  }
-  return lines;
-}
-
-function cartSnapshot(extra = {}) {
-  const items = cartLines();
-  const total = +items.reduce((a, l) => a + (l.lineTotal ?? 0), 0).toFixed(2);
-  const unpriced = items.filter((l) => l.price == null).length;
-  return {
-    status: 'cart',
-    items,
-    total,
-    ...(unpriced ? { unpricedItems: unpriced } : {}),
-    ...(state.order ? { lastOrder: state.order } : {}),
-    note: items.length
-      ? 'To order, fill in the checkout form (a declarative tool: name and address) — the shopper presses Place order.'
-      : 'The cart is empty.',
-    ...extra,
+/* One state machine. A person clicking an answer chip and an agent calling
+   answer_question enter the same function, so the page cannot drift between
+   what it shows a human and what it tells an agent. */
+(function () {
+  "use strict";
+  const E = window.Engine;
+  const $ = (s, r) => (r || document).querySelector(s);
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
   };
-}
 
-function addToCart(id, quantity = 1, actor = 'agent') {
-  const it = state.catalog.byId.get(id);
-  if (!it) return { ...cartSnapshot(), error: `"${id}" is not a product id in this catalogue.` };
-  const qty = Math.max(1, Math.floor(Number(quantity) || 1));
-  state.cart.set(id, (state.cart.get(id) || 0) + qty);
-  renderCart();
-  return cartSnapshot({ added: { id, title: it.t, quantity: qty } });
-}
-
-function removeFromCart(id, actor = 'agent') {
-  const had = state.cart.delete(id);
-  renderCart();
-  return cartSnapshot(had ? { removed: id } : { error: `"${id}" was not in the cart.` });
-}
-
-function placeOrder({ name, address }) {
-  const items = cartLines();
-  if (!items.length) return { status: 'no_order', error: 'The cart is empty.' };
-  if (!name || !address) return { status: 'no_order', error: 'Name and address are required.' };
-  const total = +items.reduce((a, l) => a + (l.lineTotal ?? 0), 0).toFixed(2);
-  state.order = { id: `CA-${Date.now().toString(36).toUpperCase()}`, name, address, items, total, placedBy: 'the shopper' };
-  state.cart = new Map();
-  renderCart();
-  return { status: 'placed', order: state.order };
-}
-
-// What a WebMCP browser does with a declarative tool call: fill the fields
-// and focus the button. Used only by the scripted demo, which says so.
-function fillCheckout({ name, address }) {
-  const form = el('checkout');
-  form.hidden = false;
-  form.elements.name.value = name ?? '';
-  form.elements.address.value = address ?? '';
-  form.querySelector('button[type=submit]').focus();
-  el('cartHint').textContent = 'Filled in for you. Check it, then press Place order — no agent can press it for you.';
-  el('cartHint').hidden = false;
-}
-
-function renderCart() {
-  const items = cartLines();
-  const list = el('cartItems');
-  list.innerHTML = '';
-  for (const l of items) {
-    const li = document.createElement('li');
-    li.innerHTML = `<span class="ct">${esc(l.title.slice(0, 48))}</span>`
-      + `<span class="cq">×${l.quantity}</span>`
-      + `<span class="cp">${l.lineTotal != null ? `$${l.lineTotal.toFixed(2)}` : '—'}</span>`
-      + `<button type="button" data-remove="${esc(l.id)}" aria-label="Remove">×</button>`;
-    list.append(li);
-  }
-  const total = items.reduce((a, l) => a + (l.lineTotal ?? 0), 0);
-  el('cartCount').textContent = items.length ? `${items.reduce((a, l) => a + l.quantity, 0)} item${items.length > 1 ? 's' : ''}` : '';
-  el('cartTotal').textContent = items.length ? `Total $${total.toFixed(2)}` : '';
-  el('checkout').hidden = !items.length;
-  el('cartHint').hidden = items.length > 0;
-  el('cartHint').textContent = 'Nothing yet. Add from a card, or let the agent call add_to_cart.';
-  const done = el('orderDone');
-  if (state.order && !items.length) {
-    done.hidden = false;
-    done.textContent = `Order ${state.order.id} placed by you — ${state.order.items.length} item${state.order.items.length > 1 ? 's' : ''}, $${state.order.total.toFixed(2)}, to ${state.order.address}.`;
-  } else {
-    done.hidden = true;
-  }
-}
-
-function showTurn(role, text) {
-  const li = document.createElement('li');
-  li.className = `turn ${role}`;
-  const who = { person: 'Person', agent: 'Agent', call: 'Tool call', note: '' }[role] ?? role;
-  li.innerHTML = `${who ? `<b>${who}</b>` : ''}${esc(text)}`;
-  el('convo').append(li);
-  // Scroll the transcript, never the page: the grid has to stay in view
-  // while the agent changes it.
-  el('convo').scrollTop = el('convo').scrollHeight;
-}
-
-function countVocab(catalog) {
-  const counts = {};
-  for (const facet of catalog.meta.facets) counts[facet] = new Map();
-  for (const it of catalog.items) {
-    for (const [facet, vals] of Object.entries(it.f)) {
-      const m = counts[facet];
-      if (!m) continue;
-      for (const v of vals) m.set(v, (m.get(v) || 0) + 1);
-    }
-  }
-  const out = {};
-  for (const [facet, m] of Object.entries(counts)) {
-    out[facet] = [...m.entries()].sort((a, b) => b[1] - a[1]).map(([value, count]) => ({ value, count }));
-  }
-  return out;
-}
-
-// --- core transitions ---------------------------------------------------
-
-function search(text, actor = 'agent', given = {}) {
-  const parsed = parseRequest(text || '', state.catalog);
-  state.said = (text || '').trim();
-  state.query = parsed.query;
-  state.constraints = parsed.constraints;
-  state.exclude = parsed.exclude;
-  state.excludeTerms = parsed.excludeTerms;
-  state.budget = parsed.budget;
-  state.sort = parsed.sort;
-  state.optional = parsed.optional;
-  state.ignored = parsed.ignored;
-  state.conflicts = parsed.conflicts;
-  state.rejected = [];
-  state.declined = new Set(parsed.noPreference ?? []);
-  state.asks = 0;
-  state.shown = null;
-  // Whatever the agent already knows arrives structured and wins over the
-  // parse: it has the whole conversation, the store has one sentence.
-  applyGiven(given ?? {});
-  state.stated = new Set([...Object.keys(state.constraints), ...Object.keys(state.exclude)]);
-  return evaluate(actor);
-}
-
-function applyGiven(given) {
-  const cat = state.catalog;
-  const accept = (facet, values) => {
-    if (!cat.facetValues[facet]) { state.rejected.push({ facet, reason: 'no such attribute' }); return null; }
-    const ok = [];
-    for (const raw of [].concat(values ?? [])) {
-      const v = canonical(facet, String(raw));
-      if (v) { if (!ok.includes(v)) ok.push(v); } else state.rejected.push({ facet, value: raw, reason: 'not in this catalogue' });
-    }
-    return ok.length ? ok : null;
+  const S = {
+    understood: null, asked: [], answers: [], waived: [],
+    pendingFacet: null, result: null, cart: [], curated: null, log: []
   };
-  for (const [facet, values] of Object.entries(given.attributes ?? {})) {
-    const ok = accept(facet, values);
-    if (ok) state.constraints[facet] = ok;
-  }
-  for (const [facet, values] of Object.entries(given.exclude ?? {})) {
-    const ok = accept(facet, values);
-    if (ok) state.exclude[facet] = ok;
-  }
-  const money = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
-  if (money(given.budget_max) != null || money(given.budget_min) != null) {
-    state.budget = { min: money(given.budget_min), max: money(given.budget_max) };
-  }
-  for (const facet of given.no_preference ?? []) {
-    if (cat.facetValues[facet]) state.declined.add(facet);
-    else state.rejected.push({ facet, reason: 'no such attribute' });
-  }
-  if (SORTS.includes(given.sort)) state.sort = given.sort;
-}
 
-// "waterproof" -> "water resistant": a value is accepted by its canonical name
-// or by any surface form the builder mapped onto it. Category leaves match by
-// head word, so "wallets" finds "wallets, card cases & money organizers".
-function canonical(facet, raw) {
-  const cat = state.catalog;
-  const want = raw.trim().toLowerCase();
-  const values = cat.facetValues[facet] ?? [];
-  if (values.includes(want)) return want;
-  for (const value of values) {
-    if ((cat.facetForms?.[facet]?.[value] ?? []).includes(want)) return value;
-  }
-  return values.find((v) => v.split(/[,&]/)[0].trim() === want) ?? null;
-}
+  /* ---------- WebMCP: the real thing if the browser has it, a spec-shaped
+       stand-in if it does not, so the same registration code runs either way */
 
-function refine(facet, values, actor = 'agent', mode = 'require') {
-  state.rejected = [];
-  if (!facet || !values?.length) return snapshot();
-  if (!state.catalog.facetValues[facet]) {
-    state.rejected.push({ facet, reason: 'no such attribute' });
-    return snapshot();
-  }
-  const ok = [];
-  for (const raw of [].concat(values)) {
-    const v = canonical(facet, String(raw));
-    if (v) { if (!ok.includes(v)) ok.push(v); } else state.rejected.push({ facet, value: raw, reason: 'not in this catalogue' });
-  }
-  if (!ok.length) return snapshot();
-  if (mode === 'exclude') state.exclude[facet] = ok; else state.constraints[facet] = ok;
-  state.declined.delete(facet);
-  state.shown = null;
-  return evaluate(actor);
-}
-
-function answerQuestion(values, actor = 'agent') {
-  const pending = state.pending;
-  if (!pending) return snapshot();
-  state.asks += 1;
-  const list = [].concat(values ?? []).filter((v) => v != null && v !== '' && v !== 'no_preference');
-  if (!list.length) {
-    // "No preference" still costs a turn — and is remembered, so the same
-    // question cannot come straight back.
-    state.declined.add(pending.facet);
-    state.pending = null;
-    return evaluate(actor, { skipped: pending.facet });
-  }
-  return refine(pending.facet, list, actor);
-}
-
-function reset(actor = 'agent') {
-  Object.assign(state, {
-    said: '', query: '', constraints: {}, exclude: {}, excludeTerms: [], budget: null,
-    sort: 'relevance', optional: [], ignored: [], conflicts: [], rejected: [],
-    stated: new Set(), declined: new Set(), asks: 0, pending: null, scored: [], shown: null,
-  });
-  el('q').value = '';
-  render({ action: 'idle', reasons: ['Waiting for a search.'], pool: [] });
-  return snapshot();
-}
-
-function evaluate(actor, extra = {}) {
-  const { catalog } = state;
-  state.scored = catalog.search(state.query, state.constraints, {
-    exclude: state.exclude,
-    excludeTerms: state.excludeTerms,
-    budget: state.budget,
-    sort: state.sort,
-    optional: state.optional,
-  });
-  const decision = decide(catalog, state.scored, state.constraints, state.asks, { declined: [...state.declined] });
-  state.pending = decision.action === 'ask' ? decision : null;
-  render(decision, extra);
-  return snapshot(decision, extra);
-}
-
-// When nothing — or almost nothing — survives every requirement, say which
-// one is doing the damage. Each requirement, refusal, banned word, required
-// query word and the budget is lifted in turn and the pool re-counted. The
-// agent gets the list; the person gets buttons.
-const RELAX_BELOW = 4;
-
-function relaxations() {
-  const cat = state.catalog;
-  if (!state.query && !Object.keys(state.constraints).length) return [];
-  const base = {
-    exclude: state.exclude, excludeTerms: state.excludeTerms, budget: state.budget,
-    sort: state.sort, optional: state.optional,
-  };
-  const count = (constraints, opts) => cat.search(state.query, constraints, { ...base, ...opts }).length;
-  const out = [];
-  for (const [facet, values] of Object.entries(state.constraints)) {
-    const c = { ...state.constraints };
-    delete c[facet];
-    out.push({ drop: `${facet} = ${values.join(' / ')}`, kind: 'require', facet, candidates: count(c, {}) });
-  }
-  for (const [facet, values] of Object.entries(state.exclude)) {
-    const ex = { ...state.exclude };
-    delete ex[facet];
-    out.push({ drop: `not ${values.join(' / ')}`, kind: 'exclude', facet, candidates: count(state.constraints, { exclude: ex }) });
-  }
-  for (const word of state.excludeTerms) {
-    out.push({ drop: `not "${word}"`, kind: 'word', word, candidates: count(state.constraints, { excludeTerms: state.excludeTerms.filter((w) => w !== word) }) });
-  }
-  const required = tokenize(state.query).filter((t) => cat.postings.has(t) && !state.optional.includes(t));
-  if (required.length > 1) {
-    for (const tok of required) {
-      out.push({ drop: `the word "${tok}"`, kind: 'term', term: tok, candidates: count(state.constraints, { optional: [...state.optional, tok] }) });
-    }
-  }
-  if (state.budget) out.push({ drop: `price ${describeBudget(state.budget)}`, kind: 'budget', candidates: count(state.constraints, { budget: null }) });
-  return out.filter((r) => r.candidates > state.scored.length).sort((a, b) => b.candidates - a.candidates).slice(0, 5);
-}
-
-function applyRelaxation(r) {
-  if (r.kind === 'require') delete state.constraints[r.facet];
-  else if (r.kind === 'exclude') delete state.exclude[r.facet];
-  else if (r.kind === 'word') state.excludeTerms = state.excludeTerms.filter((w) => w !== r.word);
-  else if (r.kind === 'term') state.optional = [...state.optional, r.term];
-  else if (r.kind === 'budget') state.budget = null;
-  state.shown = null;
-  evaluate('human');
-}
-
-// --- what both surfaces receive ----------------------------------------
-
-function shownItems() {
-  return state.shown
-    ? state.shown.map((id) => state.catalog.byId.get(id)).filter(Boolean)
-    : state.scored.slice(0, POLICY.show).map((s) => s.item);
-}
-
-function snapshot(decision, extra = {}) {
-  const d = decision || { action: state.pending ? 'ask' : 'answer', pool: state.scored.map((s) => s.item), reasons: [] };
-  const pool = d.pool ?? [];
-  const top = shownItems();
-
-  const understood = {
-    query: state.query,
-    attributes: { ...state.constraints },
-    exclude: { ...state.exclude },
-    excludeWords: [...state.excludeTerms],
-    budget: state.budget,
-    sort: state.sort,
-    noPreference: [...state.declined],
-    ignoredWords: [...state.ignored],
-  };
-  if (state.conflicts.length) understood.conflicts = state.conflicts;
-  if (state.rejected.length) understood.rejected = state.rejected;
-
-  const caveats = [
-    ...state.conflicts.map((c) => `"${c.value}" was both required and refused (same ${c.facet} in this catalogue); the requirement was kept.`),
-    ...state.rejected.map((r) => `${r.facet}${r.value != null ? `=${r.value}` : ''} was ignored: ${r.reason}.`),
-  ];
-  const base = {
-    request: state.said,
-    understood,
-    questionsAsked: state.asks,
-    candidates: pool.length,
-    why: d.reasons ?? [],
-    ...(caveats.length ? { caveats } : {}),
-    ...extra,
-  };
-  if (state.budget) {
-    const priced = pool.filter((it) => typeof it.p === 'number').length;
-    base.candidatesWithPrice = priced;
-    base.candidatesWithoutPrice = pool.length - priced;
-  }
-  if (pool.length < RELAX_BELOW && d.action !== 'idle') {
-    const relax = relaxations();
-    if (relax.length) base.relax = relax.map(({ drop, candidates }) => ({ drop, candidates }));
-  }
-
-  if (d.action === 'ask') {
+  function makeStub() {
+    const tools = new Map();
+    const target = new EventTarget();
     return {
-      ...base,
-      status: 'need_more_evidence',
-      question: d.question,
-      facet: d.facet,
-      options: d.options,
-      otherValues: d.others ?? 0,
-      notRecorded: d.unrecorded ?? 0,
-      note: 'Answering now would be a guess. Put this question to the shopper, then call answer_question — '
-        + 'or, if the conversation already answers it, call answer_question straight away. '
-        + `${d.others ? `${d.others} candidates carry a ${d.facet} value not listed; any value from list_attributes is accepted. ` : ''}`
-        + `${d.unrecorded ? `${d.unrecorded} record no ${d.facet} at all and are kept only by "no_preference".` : ''}`.trim(),
-    };
-  }
-  if (d.action === 'empty') {
-    const hint = base.relax?.length
-      ? `Nothing satisfies every requirement. Lifting ${base.relax[0].drop} leaves ${base.relax[0].candidates}; see "relax" for the rest. `
-        + 'Ask the shopper which to give up, then search again or use refine_search.'
-      : 'No product satisfies every requirement. Drop one with refine_search, or search again.';
-    return { ...base, status: 'no_match', products: [], note: hint };
-  }
-  const diffs = d.differentiators ?? [];
-  const describe = ({ facet, splits }) =>
-    `${facet} (${splits.map((s) => `${s.count} ${headWord(s.value)}`).join(', ')})`;
-  return {
-    ...base,
-    status: 'answer',
-    products: top.map(serialize),
-    differentiators: diffs,
-    note: (diffs.length
-      ? `Showing ${top.length} of ${pool.length}. They differ mainly by ${diffs.map(describe).join(' and ')}. `
-        + 'Narrow with refine_search, or curate the grid with show_products.'
-      : `Showing ${top.length} of ${pool.length}. No recorded attribute separates them further.`)
-      + (base.relax?.length ? ` Only ${pool.length} match everything; lifting ${base.relax[0].drop} would leave ${base.relax[0].candidates}.` : ''),
-  };
-}
-
-function serialize(it) {
-  return {
-    id: it.id,
-    title: it.t,
-    brand: it.b || undefined,
-    price: typeof it.p === 'number' ? it.p : undefined,
-    rating: it.r ?? undefined,
-    reviews: it.n || undefined,
-    attributes: it.f,
-  };
-}
-
-function headWord(value) {
-  return value.split(/[,&]/)[0].trim() || value;
-}
-
-function describeBudget(b) {
-  if (!b) return '';
-  if (b.min != null && b.max != null) return `$${b.min}–$${b.max}`;
-  if (b.max != null) return `under $${b.max}`;
-  return `over $${b.min}`;
-}
-
-// --- rendering ----------------------------------------------------------
-
-function render(decision, extra = {}) {
-  renderChips();
-  renderAsk(decision);
-  renderGrid(decision);
-  renderTrace(decision, extra);
-}
-
-function renderChips() {
-  const wrap = el('chips');
-  wrap.innerHTML = '';
-  const chip = (html, cls, onRemove, label) => {
-    const c = document.createElement('span');
-    c.className = `chip ${cls}`.trim();
-    c.innerHTML = html;
-    const x = document.createElement('button');
-    x.type = 'button';
-    x.textContent = '×';
-    x.setAttribute('aria-label', label);
-    x.addEventListener('click', () => { onRemove(); evaluate('human'); });
-    c.append(x);
-    wrap.append(c);
-  };
-  for (const [facet, values] of Object.entries(state.constraints)) {
-    const how = state.stated.has(facet) ? 'you said' : 'you chose';
-    chip(`<b>${esc(facet)}</b> ${esc(values.join(' / '))} <i>${how}</i>`, '', () => {
-      delete state.constraints[facet];
-      if (!state.stated.has(facet)) state.asks = Math.max(0, state.asks - 1);
-    }, `Remove ${facet} filter`);
-  }
-  for (const [facet, values] of Object.entries(state.exclude)) {
-    chip(`<b>not</b> ${esc(values.join(' / '))} <i>${esc(facet)}</i>`, 'no',
-      () => { delete state.exclude[facet]; }, `Stop excluding ${facet}`);
-  }
-  for (const word of state.excludeTerms) {
-    chip(`<b>not</b> ${esc(word)}`, 'no',
-      () => { state.excludeTerms = state.excludeTerms.filter((w) => w !== word); }, `Stop excluding ${word}`);
-  }
-  if (state.budget) {
-    chip(`<b>price</b> ${esc(describeBudget(state.budget))}`, '', () => { state.budget = null; }, 'Remove budget');
-  }
-  if (state.sort !== 'relevance') {
-    chip(`<b>sort</b> ${esc(SORT_LABEL[state.sort])}`, '', () => { state.sort = 'relevance'; }, 'Remove sort');
-  }
-  for (const facet of state.declined) {
-    chip(`<b>${esc(facet)}</b> any <i>no preference</i>`, 'any',
-      () => { state.declined.delete(facet); }, `Forget no preference on ${facet}`);
-  }
-}
-
-function renderAsk(d) {
-  const box = el('ask');
-  if (d.action !== 'ask') { box.hidden = true; return; }
-  box.hidden = false;
-  el('askwhy').textContent = `Not enough evidence — ${d.pool.length} candidates, top only ${(d.separation * 100).toFixed(0)}% clear`;
-  el('askq').textContent = d.question;
-  const opts = el('askopts');
-  opts.innerHTML = '';
-  for (const o of d.options) {
-    const b = document.createElement('button');
-    b.innerHTML = `${esc(o.label ?? o.value)}<small>${o.count} items</small>`;
-    b.addEventListener('click', () => answerQuestion([o.value], 'human'));
-    opts.append(b);
-  }
-  const skip = document.createElement('button');
-  skip.className = 'skip';
-  skip.textContent = d.others ? `No preference · ${d.others} more under other values` : 'No preference';
-  skip.addEventListener('click', () => answerQuestion(null, 'human'));
-  opts.append(skip);
-}
-
-function renderRelax(d) {
-  const box = el('relax');
-  box.innerHTML = '';
-  const pool = d.pool?.length ?? 0;
-  if (d.action === 'idle' || pool >= RELAX_BELOW) { box.hidden = true; return; }
-  const options = relaxations();
-  if (!options.length) { box.hidden = true; return; }
-  box.hidden = false;
-  const lead = document.createElement('span');
-  lead.className = 'lead';
-  lead.textContent = pool ? `Only ${pool} match everything. Without…` : 'Nothing matches everything. Without…';
-  box.append(lead);
-  for (const r of options) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.innerHTML = `${esc(r.drop)}<small>${r.candidates} items</small>`;
-    b.addEventListener('click', () => applyRelaxation(r));
-    box.append(b);
-  }
-}
-
-function renderGrid(d) {
-  const grid = el('grid');
-  const empty = el('empty');
-  grid.innerHTML = '';
-  renderRelax(d);
-
-  if (d.action === 'idle') {
-    el('statusTitle').textContent = 'Start a search';
-    el('statusN').textContent = '';
-    empty.hidden = true;
-    return;
-  }
-  if (d.action === 'empty') {
-    el('statusTitle').textContent = 'No match';
-    el('statusN').textContent = '0 of 9,901';
-    empty.hidden = false;
-    return;
-  }
-  empty.hidden = true;
-
-  const items = shownItems();
-  el('statusTitle').textContent = d.action === 'ask'
-    ? 'Best guess so far'
-    : (state.shown ? 'Curated by the agent' : 'Recommended');
-  el('statusN').textContent = `showing ${items.length} of ${d.pool.length} candidates`;
-
-  for (const it of items) {
-    const card = document.createElement('article');
-    card.className = 'p';
-    const tags = Object.entries(it.f).filter(([k]) => k !== 'kind').slice(0, 3)
-      .map(([, vals]) => `<span class="tag">${esc(vals[0])}</span>`).join('');
-    const price = typeof it.p === 'number'
-      ? `$${it.p.toFixed(2)}`
-      : (state.budget ? '<span class="dim">price not listed</span>' : '—');
-    card.innerHTML = `
-      <div class="t">${esc(it.t)}</div>
-      ${it.b ? `<div class="brand2">${esc(it.b)}</div>` : ''}
-      <div class="tags">${tags}</div>
-      <div class="meta">
-        <span class="price">${price}</span>
-        <span class="rating">${it.r ? `${it.r}★ · ${formatCount(it.n)}` : ''}</span>
-        <button type="button" class="add" data-id="${esc(it.id)}">Add</button>
-      </div>`;
-    grid.append(card);
-  }
-}
-
-function renderTrace(d, extra) {
-  const lines = [];
-  const k = (label, value) => lines.push(`<span class="k">${label.padEnd(10)}</span> ${esc(value)}`);
-  k('request', state.said || '—');
-  k('query', state.query || '—');
-  const cons = Object.entries(state.constraints).map(([f, v]) => `${f}=${v.join('|')}`).join('  ');
-  k('known', cons || '—');
-  const nots = [
-    ...Object.entries(state.exclude).map(([f, v]) => `${f}≠${v.join('|')}`),
-    ...state.excludeTerms.map((w) => `"${w}"`),
-  ].join('  ');
-  if (nots) k('not', nots);
-  if (state.budget) k('price', describeBudget(state.budget));
-  if (state.sort !== 'relevance') k('sort', SORT_LABEL[state.sort]);
-  if (state.declined.size) k('any', [...state.declined].join('  '));
-  if (state.ignored.length) k('ignored', state.ignored.join('  '));
-  for (const c of state.conflicts) k('conflict', `"${c.value}" both required and refused — kept`);
-  k('candidates', String(d.pool?.length ?? 0));
-  k('asked', `${state.asks} / ${POLICY.maxAsks}`);
-  if (extra.skipped) k('skipped', extra.skipped);
-  lines.push('');
-  lines.push(`<span class="v">decision → ${d.action}</span>`);
-  for (const r of d.reasons ?? []) lines.push(`  · ${esc(r)}`);
-  for (const diff of d.differentiators ?? []) {
-    lines.push(`  · shown items differ by ${esc(diff.facet)}: ${esc(diff.splits.map((s) => `${headWord(s.value)} ${s.count}`).join(', '))}`);
-  }
-  el('trace').innerHTML = lines.join('\n');
-}
-
-function logCall(name, result) {
-  el('callhint').hidden = true;
-  const li = document.createElement('li');
-  const summary = result?.status === 'need_more_evidence'
-    ? `asked about ${result.facet}`
-    : (result?.products
-      ? `${result.products.length} products · ${result.candidates ?? 0} candidates`
-      : 'ok');
-  li.innerHTML = `<span class="nm">${esc(name)}()</span><br><span class="rs">${esc(summary)}</span>`;
-  el('calls').prepend(li);
-}
-
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-  ));
-}
-
-function formatCount(n) {
-  if (!n) return '0 reviews';
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k reviews`;
-  return `${n} reviews`;
-}
-
-// --- the surface WebMCP tools drive ------------------------------------
-
-const api = {
-  search, refine, answerQuestion, reset, snapshot,
-  addToCart, removeFromCart, cart: () => cartSnapshot(),
-  get state() { return state; },
-  showProducts(ids) {
-    state.shown = ids.filter((id) => state.catalog.byId.has(id));
-    render({ action: 'answer', pool: state.scored.map((s) => s.item), reasons: ['Grid curated by the agent.'] });
-    return snapshot();
-  },
-  explain(id) {
-    const hit = state.scored.find((s) => s.item.id === id);
-    if (!hit) return { error: `"${id}" is not in the current candidate set.` };
-    return {
-      id,
-      title: hit.item.t,
-      rank: state.scored.indexOf(hit) + 1,
-      score: Number(hit.score.toFixed(3)),
-      matchedWords: hit.matched,
-      matchesWholeRequest: Boolean(hit.full),
-      attributesUsed: hit.item.f,
-      popularitySignal: { rating: hit.item.r, reviews: hit.item.n },
-      policy: {
-        candidates: state.scored.length,
-        questionsAsked: state.asks,
-        maxAsks: POLICY.maxAsks,
-        answerBelow: POLICY.answerBelow,
-        sort: state.sort,
-        budget: state.budget,
+      _stub: true,
+      registerTool(def, opts) {
+        tools.set(def.name, def);
+        if (opts && opts.signal) {
+          opts.signal.addEventListener("abort", () => {
+            tools.delete(def.name);
+            target.dispatchEvent(new Event("toolchange"));
+          });
+        }
+        target.dispatchEvent(new Event("toolchange"));
       },
-      note: 'Score = BM25 over title and attribute words (IDF-weighted, length-normalised) '
-        + '× coverage of the required words + 0.35 × log-scaled review demand. '
-        + 'Deterministic; no model call.',
+      getTools: () => Array.from(tools.values()),
+      addEventListener: (t, f) => target.addEventListener(t, f),
+      callTool: (name, input) => {
+        const t = tools.get(name);
+        if (!t) throw new Error("no such tool: " + name);
+        return t.execute(input);
+      }
     };
-  },
-  vocab() { return state.vocab; },
-};
+  }
 
-boot();
+  // The spec moved the getter from Navigator to Document in May 2026;
+  // Chromium keeps the old name as a deprecated alias. Read both, prefer the
+  // current one, so a browser on either side of the rename is still "live".
+  const native = (window.document.modelContext &&
+      typeof document.modelContext.registerTool === "function" && document.modelContext) ||
+    (window.navigator.modelContext &&
+      typeof navigator.modelContext.registerTool === "function" && navigator.modelContext) ||
+    null;
+  const live = !!native;
+  const mc = live ? native : makeStub();
+  if (!live) window.__modelContextStub = mc;
+
+  /* MCP-shaped result: content carries the JSON as text, structuredContent
+     carries the object, so a client following either convention reads the same
+     thing. */
+  function wrap(obj) {
+    return {
+      content: [{ type: "text", text: JSON.stringify(obj, null, 2) }],
+      structuredContent: obj
+    };
+  }
+
+  function logCall(name, input, out) {
+    S.log.unshift({ name, input, status: out && out.status, at: Date.now() });
+    if (S.log.length > 24) S.log.pop();
+    renderLog();
+  }
+
+  /* ---------- the shared entry points ------------------------------------ */
+
+  function publicView(res) {
+    const o = {
+      status: res.status,
+      candidates: res.candidates,
+      understood: {
+        query: res.understood.query,
+        attributes: res.understood.attributes.map(a => ({ facet: a.facet, value: a.value })),
+        exclusions: res.understood.exclusions.map(e => ({ facet: e.facet, value: e.value })),
+        budget: res.understood.budget,
+        sort: res.understood.sort,
+        no_preference: res.waived,
+        ignored: res.understood.ignored,
+        conflicts: res.understood.conflicts,
+        superseded: res.understood.superseded || [],
+        retraction: res.understood.retraction || null
+      },
+      why: res.why
+    };
+    if (res.status === "need_more_evidence") {
+      o.question = res.question;
+      o.facet = res.facet;
+      o.options = res.options;
+      o.note = res.note;
+      // The person can see the candidate grid behind the question, so an agent
+      // that cannot is a second, worse surface — and with no ids it cannot use
+      // show_products either. It gets the same pool, capped and named for what
+      // it is, so the sample cannot be mistaken for the answer.
+      o.candidate_sample = res.products.slice(0, 6).map(brief);
+      o.candidate_sample_note = "Candidates, not a recommendation. Ordering them " +
+        "now is the guess the question exists to avoid — ask first.";
+    } else {
+      o.products = (S.curated || res.products).slice(0, 12).map(brief);
+      o.differentiators = res.differentiators;
+    }
+    if (res.relax) o.relax = res.relax.map(x => ({ lift: x.label, leaves: x.count }));
+    return o;
+  }
+
+  const brief = (p) => ({
+    id: p.id, title: p.title, price: p.price, rating: p.rating,
+    reviews: p.reviews, attributes: p.attrs
+  });
+
+  function doSearch(sentence, structured) {
+    S.curated = null;
+    const res = E.search(sentence, null, structured);
+    adopt(res);
+    $("#q").value = sentence;
+    render();
+    return publicView(res);
+  }
+
+  function adopt(res) {
+    S.understood = res.understood;
+    S.asked = res.asked;
+    S.answers = res.answers;
+    S.waived = res.waived;
+    S.result = res;
+    S.pendingFacet = res.status === "need_more_evidence" ? res.facet : null;
+    syncTools();
+  }
+
+  function doAnswer(values) {
+    if (!S.pendingFacet) return { error: "No question is open." };
+    S.curated = null;
+    const res = E.answer({
+      understood: S.understood, asked: S.asked, answers: S.answers,
+      waived: S.waived, pendingFacet: S.pendingFacet
+    }, values);
+    adopt(res);
+    render();
+    return publicView(res);
+  }
+
+  function doRefine(change) {
+    if (!S.understood) return { error: "Nothing to refine yet." };
+    const dropped = [];
+    if (change.drop) {
+      for (const d of [].concat(change.drop)) dropped.push(...dropOne(d));
+    }
+    if (change.drop_all) {
+      const u = S.understood;
+      for (const a of u.attributes) dropped.push({ facet: a.facet, value: a.value });
+      for (const e of u.exclusions) dropped.push({ facet: e.facet, value: e.value, wasRefusal: true });
+      if (u.budget) dropped.push({ facet: "budget", value: E.budgetLabel(u.budget) });
+      u.attributes = []; u.exclusions = []; u.bannedWords = []; u.budget = null;
+      S.answers = []; S.asked = []; S.waived = [];
+    }
+    if (change.require) {
+      const hit = findValue(change.require);
+      if (!hit) return { error: "This catalog does not carry \u201c" + change.require + "\u201d." };
+      S.understood.attributes.push({ facet: hit.facet, value: hit.value, said: hit.value });
+    }
+    if (change.refuse) {
+      const hit = findValue(change.refuse);
+      S.understood.exclusions.push({
+        facet: hit ? hit.facet : null,
+        value: hit ? hit.value : change.refuse, said: change.refuse
+      });
+      S.understood.bannedWords.push(String(change.refuse).toLowerCase());
+    }
+    S.understood.superseded = (S.understood.superseded || []).concat(dropped);
+    const res = E.finish({
+      understood: S.understood, asked: S.asked, answers: S.answers, waived: S.waived
+    });
+    S.curated = null;
+    adopt(res);
+    render();
+    const out = publicView(res);
+    if (dropped.length) out.dropped = dropped;
+    return out;
+  }
+
+  // Remove one thing the shopper has taken back, wherever it is held.
+  function dropOne(text) {
+    const t = String(text).toLowerCase().trim();
+    const u = S.understood;
+    const gone = [];
+    u.attributes = u.attributes.filter(a => {
+      const hit = String(a.value).toLowerCase() === t || a.facet === t;
+      if (hit) gone.push({ facet: a.facet, value: a.value });
+      return !hit;
+    });
+    u.exclusions = u.exclusions.filter(e => {
+      const hit = String(e.value).toLowerCase() === t;
+      if (hit) {
+        gone.push({ facet: e.facet, value: e.value, wasRefusal: true });
+        const w = u.bannedWords.indexOf(e.said);
+        if (w >= 0) u.bannedWords.splice(w, 1);
+      }
+      return !hit;
+    });
+    S.answers = (S.answers || []).filter(ans => {
+      const hit = ans.facet === t || ans.values.some(v => String(v).toLowerCase() === t);
+      if (hit) {
+        gone.push({ facet: ans.facet, value: ans.values.join(" / ") });
+        S.asked = S.asked.filter(f => f !== ans.facet);
+      }
+      return !hit;
+    });
+    if ((t === "budget" || t === "price") && u.budget) {
+      gone.push({ facet: "budget", value: E.budgetLabel(u.budget) });
+      u.budget = null;
+    }
+    const term = u.terms.indexOf(t);
+    if (term >= 0) { gone.push({ facet: "word", value: t }); u.terms.splice(term, 1); }
+    return gone;
+  }
+
+  function findValue(text) {
+    const t = String(text).toLowerCase().trim();
+    const voc = E.attributeVocabulary();
+    for (const f of E.FACETS) {
+      for (const o of voc[f]) if (o.value.toLowerCase() === t) return { facet: f, value: o.value };
+    }
+    return null;
+  }
+
+  function reset() {
+    S.understood = null; S.asked = []; S.answers = []; S.waived = [];
+    S.pendingFacet = null; S.result = null; S.curated = null;
+    $("#q").value = "";
+    syncTools();
+    render();
+    return { status: "reset", cart_kept: S.cart.length };
+  }
+
+  /* ---------- tools ------------------------------------------------------ */
+
+  let answerController = null;
+  const baseController = new AbortController();
+
+  // Registration that survives the spec's edges: a native implementation may
+  // throw on a duplicate name, may honour the AbortSignal, or may only expose
+  // unregisterTool. Do the safe thing under all three.
+  function safeRegister(def, controller) {
+    try {
+      const r = mc.registerTool(def, { signal: controller.signal });
+      if (r && typeof r.catch === "function") r.catch(() => {});
+    } catch (err) {
+      if (typeof mc.unregisterTool === "function") {
+        try { mc.unregisterTool(def.name); } catch (e) { /* not registered */ }
+        try { mc.registerTool(def, { signal: controller.signal }); }
+        catch (e2) { console.warn("registerTool failed for " + def.name, e2); }
+      } else {
+        console.warn("registerTool failed for " + def.name, err);
+      }
+    }
+  }
+  function safeUnregister(name, controller) {
+    controller.abort();   // the spec's own way to remove a tool
+    if (typeof mc.unregisterTool === "function") {
+      try { mc.unregisterTool(name); } catch (e) { /* already gone via the signal */ }
+    }
+  }
+
+  function syncTools() {
+    const open = !!S.pendingFacet;
+    if (open && !answerController) {
+      answerController = new AbortController();
+      safeRegister({
+        name: "answer_question",
+        title: "Answer the store's question",
+        description: "Answer the question the store just asked. Pass one or more option " +
+          "values, or no_preference — which is remembered and never asked about again.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            values: { type: "array", items: { type: "string" },
+              description: "Option values, or the single value no_preference." }
+          },
+          required: ["values"]
+        },
+        execute: async (input) => {
+          const out = doAnswer(input.values);
+          logCall("answer_question", input, out);
+          return wrap(out);
+        }
+      }, answerController);
+    } else if (!open && answerController) {
+      safeUnregister("answer_question", answerController);
+      answerController = null;
+    }
+    renderTools();
+  }
+
+  function registerAll() {
+    const t = (def) => safeRegister(def, baseController);
+
+    t({
+      name: "search_products",
+      title: "Search the store",
+      description: "Search this menswear catalog. Pass the shopper's request in their own " +
+        "words — refusals, budget and all. Returns products, or a question when answering " +
+        "would be a guess. Anything you already know can be passed structured and will " +
+        "override the parse.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The shopper's request, verbatim." },
+          attributes: { type: "array", items: { type: "object" },
+            description: "Known requirements as {facet, value}." },
+          exclusions: { type: "array", items: { type: "object" },
+            description: "Known refusals as {facet, value}." },
+          budget: { type: "object", description: "{min, max} in dollars." },
+          no_preference: { type: "array", items: { type: "string" },
+            description: "Facets the shopper has said they do not mind." }
+        },
+        required: ["query"]
+      },
+      execute: async (input) => {
+        const out = doSearch(input.query, input);
+        logCall("search_products", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "refine_search",
+      title: "Add one requirement or one refusal",
+      description: "Narrow the current search by one attribute value, or rule one out.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          require: { type: "string", description: "An attribute value to require." },
+          refuse: { type: "string", description: "An attribute value or word to rule out." }
+        }
+      },
+      execute: async (input) => {
+        const out = doRefine(input);
+        logCall("refine_search", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "revise_search",
+      title: "Take something back",
+      description: "The shopper changed their mind. Drop one thing they had said — an " +
+        "attribute value, a refusal, an answer, a facet name, or \"budget\" — and keep " +
+        "the rest. Pass drop_all to start the request over; the cart is kept. The store " +
+        "reports what it dropped so you can tell the shopper it heard them.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          drop: { type: "array", items: { type: "string" },
+            description: "Values, facet names, or \"budget\" to take back." },
+          drop_all: { type: "boolean", description: "Take the whole request back." }
+        }
+      },
+      execute: async (input) => {
+        const out = doRefine({ drop: input.drop, drop_all: input.drop_all });
+        logCall("revise_search", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "list_attributes",
+      title: "The vocabulary this catalog carries",
+      description: "Every attribute value in the catalog, with how many products record it.",
+      inputSchema: { type: "object", properties: {} },
+      annotations: { readOnlyHint: true },
+      execute: async () => {
+        const out = { catalog_size: E.CATALOG.length, attributes: E.attributeVocabulary() };
+        logCall("list_attributes", {}, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "show_products",
+      title: "Put your own picks in the grid",
+      description: "Replace the grid with the ids you picked, in your order.",
+      inputSchema: {
+        type: "object",
+        properties: { ids: { type: "array", items: { type: "string" } } },
+        required: ["ids"]
+      },
+      execute: async (input) => {
+        S.curated = (input.ids || []).map(E.byId).filter(Boolean);
+        render();
+        const out = { status: "showing", count: S.curated.length };
+        logCall("show_products", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "explain_ranking",
+      title: "Why this product is where it is",
+      description: "Which words matched, whether the whole request matched, and the demand signal.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"]
+      },
+      annotations: { readOnlyHint: true },
+      execute: async (input) => {
+        const p = E.byId(input.id);
+        if (!p) return wrap({ error: "No such product." });
+        const u = S.understood || { terms: [], attributes: [], exclusions: [] };
+        const out = {
+          id: p.id, title: p.title,
+          matched_words: u.terms.filter(t => p.title.toLowerCase().includes(t)),
+          matched_attributes: u.attributes.filter(a => (p.attrs[a.facet] || []).includes(a.value))
+            .map(a => a.facet + " = " + a.value),
+          unrecorded_attributes: u.attributes.filter(a => !p.attrs[a.facet])
+            .map(a => a.facet + " (not recorded — kept, ranked after)"),
+          demand: { reviews: p.reviews, rating: p.rating,
+            note: "Demand is proxied by log-scaled review volume; a frozen catalog has no click log." },
+          price: p.price == null ? "not listed" : "$" + p.price,
+          questions_asked: S.asked, question_budget_left: Math.max(0, 3 - S.asked.length)
+        };
+        logCall("explain_ranking", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "add_to_cart",
+      title: "Add to cart",
+      description: "Add a product to the cart by id.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" }, quantity: { type: "number" } },
+        required: ["id"]
+      },
+      execute: async (input) => {
+        const p = E.byId(input.id);
+        if (!p) return wrap({ error: "No such product." });
+        const qty = Math.max(1, Math.round(input.quantity || 1));
+        const line = S.cart.find(l => l.id === p.id);
+        if (line) line.qty += qty; else S.cart.push({ id: p.id, qty });
+        renderCart();
+        const out = cartView();
+        logCall("add_to_cart", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "remove_from_cart",
+      title: "Remove from cart",
+      description: "Remove a product from the cart by id.",
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      execute: async (input) => {
+        S.cart = S.cart.filter(l => l.id !== input.id);
+        renderCart();
+        const out = cartView();
+        logCall("remove_from_cart", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "view_cart",
+      title: "See the cart",
+      description: "The cart, with line totals.",
+      inputSchema: { type: "object", properties: {} },
+      annotations: { readOnlyHint: true },
+      execute: async () => {
+        const out = cartView();
+        logCall("view_cart", {}, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "reset_search",
+      title: "Start the search over",
+      description: "Clear the search, including the question budget. The cart is kept.",
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => {
+        const out = reset();
+        logCall("reset_search", {}, out);
+        return wrap(out);
+      }
+    });
+  }
+
+  function cartView() {
+    const lines = S.cart.map(l => {
+      const p = E.byId(l.id);
+      return { id: p.id, title: p.title, quantity: l.qty,
+        unit_price: p.price, line_total: p.price == null ? null : +(p.price * l.qty).toFixed(2) };
+    });
+    const total = lines.reduce((a, l) => a + (l.line_total || 0), 0);
+    return { lines, total: +total.toFixed(2),
+      unpriced: lines.filter(l => l.unit_price == null).length };
+  }
+
+  /* ---------- rendering -------------------------------------------------- */
+
+  function render() {
+    renderUnderstood();
+    renderQuestion();
+    renderWhy();
+    renderGrid();
+    renderCart();
+    renderTools();
+  }
+
+  function chip(text, kind) {
+    const c = el("span", "chip " + (kind || ""), text);
+    return c;
+  }
+
+  function renderUnderstood() {
+    const box = $("#understood");
+    box.innerHTML = "";
+    const u = S.understood;
+    if (!u) { box.hidden = true; return; }
+    box.hidden = false;
+
+    const add = (t, k) => box.appendChild(chip(t, k));
+    if (u.retraction) {
+      add(u.retraction.kind === "reset"
+        ? "starting over"
+        : "following the change", "changed");
+    }
+    for (const s of u.superseded || []) add(s.value, "dropped");
+    for (const a of u.attributes) add(a.value, "want");
+    for (const ans of S.answers) add(ans.values.join(" or "), "want");
+    for (const e of u.exclusions) add("not " + e.value, "refuse");
+    if (u.budget) add(E.budgetLabel(u.budget), "budget");
+    if (u.sort) add({ "price-asc": "cheapest first", "price-desc": "priciest first",
+      rating: "best rated first", demand: "most popular first" }[u.sort], "sort");
+    for (const w of S.waived) add(E.FACET_LABEL[w] + ": no preference", "waived");
+    for (const c of u.conflicts) add("said both ways: " + c, "conflict");
+    if (u.ignored.length) {
+      const ig = Array.from(new Set(u.ignored)).slice(0, 4);
+      add("ignored: " + ig.join(", "), "ignored");
+    }
+    if (!box.children.length) add("read as a plain keyword search", "ignored");
+  }
+
+  function renderQuestion() {
+    const box = $("#question");
+    box.innerHTML = "";
+    const r = S.result;
+    if (!r || r.status !== "need_more_evidence") { box.hidden = true; return; }
+    box.hidden = false;
+
+    box.appendChild(el("p", "ask", r.question));
+    const opts = el("div", "options");
+    for (const o of r.options.slice(0, 6)) {
+      const b = el("button", "opt");
+      b.appendChild(el("span", "opt-value", o.value));
+      b.appendChild(el("span", "opt-count", o.count + " left"));
+      b.addEventListener("click", () => doAnswer([o.value]));
+      // hovering shows what this answer would clear — the point of the question
+      b.addEventListener("mouseenter", () => previewOption(r.facet, o.value));
+      b.addEventListener("focus", () => previewOption(r.facet, o.value));
+      b.addEventListener("mouseleave", clearPreview);
+      b.addEventListener("blur", clearPreview);
+      opts.appendChild(b);
+    }
+    const none = el("button", "opt none", "no preference");
+    none.addEventListener("click", () => doAnswer(["no_preference"]));
+    opts.appendChild(none);
+    box.appendChild(opts);
+    box.appendChild(el("p", "note", r.note));
+  }
+
+  function previewOption(facet, value) {
+    const grid = $("#grid");
+    let kept = 0;
+    for (const card of grid.children) {
+      const p = E.byId(card.dataset.id);
+      const survives = !p.attrs[facet] || (p.attrs[facet] || []).includes(value);
+      card.classList.toggle("culled", !survives);
+      if (survives) kept++;
+    }
+    $("#preview").textContent = "answering \u201c" + value + "\u201d leaves " + kept +
+      " of these " + grid.children.length;
+    $("#preview").hidden = false;
+  }
+
+  function clearPreview() {
+    for (const card of $("#grid").children) card.classList.remove("culled");
+    $("#preview").hidden = true;
+  }
+
+  function renderWhy() {
+    const box = $("#why");
+    box.innerHTML = "";
+    const r = S.result;
+    if (!r) { box.hidden = true; return; }
+    box.hidden = false;
+    for (const line of r.why) box.appendChild(el("li", null, line));
+
+    if (r.differentiators && r.differentiators.length) {
+      const d = r.differentiators[0];
+      box.appendChild(el("li", "differ", "What still separates them: " +
+        d.splits.map(s => s.count + " " + s.value).join(", ") + "."));
+    }
+    if (r.relax && r.relax.length) {
+      const li = el("li", "relax");
+      li.appendChild(document.createTextNode("Lift one requirement: "));
+      for (const opt of r.relax) {
+        const b = el("button", "lift", opt.label + " \u2192 " + opt.count);
+        b.addEventListener("click", () => liftConstraint(opt));
+        li.appendChild(b);
+      }
+      box.appendChild(li);
+    }
+  }
+
+  function liftConstraint(opt) {
+    const u = S.understood;
+    if (opt.kind === "attribute") u.attributes.splice(opt.index, 1);
+    if (opt.kind === "exclusion") {
+      const dropped = u.exclusions.splice(opt.index, 1)[0];
+      const w = u.bannedWords.indexOf(dropped.said);
+      if (w >= 0) u.bannedWords.splice(w, 1);
+    }
+    if (opt.kind === "budget") u.budget = null;
+    if (opt.kind === "term") u.terms.splice(opt.index, 1);
+    if (opt.kind === "answer") S.answers.splice(opt.index, 1);
+    const res = E.finish({ understood: u, asked: S.asked, answers: S.answers, waived: S.waived });
+    S.curated = null;
+    adopt(res);
+    render();
+  }
+
+  function renderGrid() {
+    const grid = $("#grid");
+    grid.innerHTML = "";
+    const r = S.result;
+    const count = $("#count");
+    if (!r) {
+      count.textContent = "";
+      $("#empty").hidden = false;
+      return;
+    }
+    $("#empty").hidden = true;
+    const list = S.curated || r.products;
+    count.textContent = S.curated
+      ? S.curated.length + " picked by the agent"
+      : r.candidates + (r.candidates === 1 ? " candidate" : " candidates") +
+        (r.candidates > list.length ? ", showing " + list.length : "");
+
+    for (const p of list) {
+      const card = el("article", "card");
+      card.dataset.id = p.id;
+      card.appendChild(el("h3", null, p.title));
+      const meta = el("p", "meta");
+      const bits = [];
+      for (const f of E.FACETS) if (p.attrs[f]) bits.push(p.attrs[f].join(", "));
+      meta.textContent = bits.join(" \u00b7 ") || "no attributes recorded";
+      card.appendChild(meta);
+      const foot = el("p", "foot");
+      foot.appendChild(el("span", "price", p.price == null ? "price not listed" : "$" + p.price));
+      foot.appendChild(el("span", "rev", p.rating + " from " + p.reviews.toLocaleString() + " reviews"));
+      card.appendChild(foot);
+      const add = el("button", "add", "Add to cart");
+      add.addEventListener("click", async () => {
+        const line = S.cart.find(l => l.id === p.id);
+        if (line) line.qty++; else S.cart.push({ id: p.id, qty: 1 });
+        renderCart();
+        logCall("add_to_cart", { id: p.id }, cartView());
+      });
+      card.appendChild(add);
+      grid.appendChild(card);
+    }
+  }
+
+  function renderCart() {
+    const v = cartView();
+    $("#cart-count").textContent = v.lines.reduce((a, l) => a + l.quantity, 0);
+    $("#cart-total").textContent = "$" + v.total.toFixed(2);
+    const list = $("#cart-lines");
+    list.innerHTML = "";
+    for (const l of v.lines) {
+      const li = el("li");
+      li.appendChild(el("span", "cl-title", l.title));
+      li.appendChild(el("span", "cl-price",
+        l.line_total == null ? "not listed" : "$" + l.line_total.toFixed(2)));
+      const x = el("button", "cl-x", "Remove");
+      x.addEventListener("click", () => {
+        S.cart = S.cart.filter(c => c.id !== l.id);
+        renderCart();
+      });
+      li.appendChild(x);
+      list.appendChild(li);
+    }
+    $("#checkout-total").value = v.total.toFixed(2);
+  }
+
+  function renderTools() {
+    const box = $("#tools");
+    box.innerHTML = "";
+    for (const t of mc.getTools()) {
+      const li = el("li", t.name === "answer_question" ? "tool live" : "tool");
+      li.appendChild(el("span", "tname", t.name));
+      if (t.annotations && t.annotations.readOnlyHint) li.appendChild(el("span", "ro", "read-only"));
+      box.appendChild(li);
+    }
+    $("#tool-note").textContent = S.pendingFacet
+      ? "answer_question is registered because a question is open."
+      : "answer_question is not registered — nothing is waiting on the shopper.";
+  }
+
+  function renderLog() {
+    const box = $("#log");
+    box.innerHTML = "";
+    for (const c of S.log) {
+      const li = el("li");
+      li.appendChild(el("span", "lname", c.name));
+      const arg = JSON.stringify(c.input);
+      li.appendChild(el("span", "largs", arg.length > 64 ? arg.slice(0, 61) + "\u2026" : arg));
+      if (c.status) li.appendChild(el("span", "lstatus " + c.status, c.status));
+      box.appendChild(li);
+    }
+  }
+
+  /* ---------- the scripted agent ---------------------------------------- */
+
+  const SCRIPT = [
+    { who: "shopper", text: "I need a wallet that is not leather, under $30." },
+    { who: "agent", text: "Let me ask the store.", act: () =>
+        mc.callTool("search_products", { query: "a wallet that is not leather, under $30" }) },
+    { who: "store", text: null, read: (r) => r.status === "need_more_evidence"
+        ? "The store asks back: " + r.question
+        : "The store answered with " + r.candidates + " candidates." },
+    { who: "agent", text: "It won't guess. Passing the question on." },
+    { who: "shopper", text: "Nylon is fine." },
+    { who: "agent", text: "answer_question appeared in the tool list — using it.",
+      act: () => mc.callTool("answer_question", { values: ["nylon"] }) },
+    { who: "shopper", text: "Actually, forget the budget — I'd rather have a good one." },
+    { who: "agent", text: "Taking the budget back and keeping the rest.",
+      act: () => mc.callTool("revise_search", { drop: ["budget"] }) },
+    { who: "store", text: null, read: (r) => r.dropped && r.dropped.length
+        ? "Dropped " + r.dropped.map(d => d.value).join(", ") +
+          " — " + r.candidates + " candidates now, nylon still held."
+        : "Nothing to drop." },
+    { who: "agent", text: "Why is the first one first?",
+      act: () => {
+        const first = (S.curated || S.result.products)[0];
+        return first ? mc.callTool("explain_ranking", { id: first.id }) : null;
+      } },
+    { who: "agent", text: "Showing the three best rated of those.",
+      act: () => {
+        const top = (S.result.products || []).slice()
+          .sort((a, b) => b.rating - a.rating).slice(0, 3).map(p => p.id);
+        return mc.callTool("show_products", { ids: top });
+      } },
+    { who: "agent", text: "Adding the first to the cart.",
+      act: () => {
+        const first = (S.curated || [])[0];
+        return first ? mc.callTool("add_to_cart", { id: first.id }) : null;
+      } },
+    { who: "agent", text: "Checkout is filled in. The last press is yours \u2014 I don't have it." }
+  ];
+
+  async function runScript() {
+    const panel = $("#agent");
+    panel.hidden = false;
+    $("#agent-lines").innerHTML = "";
+    for (const step of SCRIPT) {
+      let out = null;
+      if (step.act) out = await step.act();
+      const text = step.read
+        ? step.read(out && out.structuredContent ? out.structuredContent : S.result)
+        : step.text;
+      if (text) {
+        const li = el("li", "line " + step.who);
+        li.appendChild(el("span", "who", step.who));
+        li.appendChild(el("span", "said", text));
+        $("#agent-lines").appendChild(li);
+        $("#agent-lines").scrollTop = $("#agent-lines").scrollHeight;
+      }
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  }
+
+  /* ---------- wiring ----------------------------------------------------- */
+
+  let booted = false;
+  function init() {
+    if (booted) return;   // DOMContentLoaded fires once; a duplicate include must not register twice
+    booted = true;
+    registerAll();
+    syncTools();
+
+    $("#badge").textContent = live ? "WebMCP live in this browser" : "no WebMCP here — stand-in in use";
+    $("#badge").className = live ? "badge live" : "badge stub";
+    $("#catalog-size").textContent = E.CATALOG.length.toLocaleString();
+
+    $("#search").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const q = $("#q").value.trim();
+      if (q) { const out = doSearch(q); logCall("search_products", { query: q }, out); }
+    });
+
+    for (const b of document.querySelectorAll("[data-example]")) {
+      b.addEventListener("click", () => {
+        const q = b.dataset.example;
+        const out = doSearch(q);
+        logCall("search_products", { query: q }, out);
+      });
+    }
+
+    $("#reset").addEventListener("click", () => { reset(); logCall("reset_search", {}, { status: "reset" }); });
+    $("#run-agent").addEventListener("click", runScript);
+
+    $("#checkout").addEventListener("submit", (e) => {
+      e.preventDefault();
+      $("#placed").hidden = false;
+      $("#placed").textContent = "Order placed. Nothing left the page \u2014 this is a demo.";
+    });
+
+    if (mc.addEventListener) mc.addEventListener("toolchange", renderTools);
+    render();
+
+    if (new URLSearchParams(location.search).get("agent") === "demo") setTimeout(runScript, 600);
+  }
+
+  document.addEventListener("DOMContentLoaded", init);
+})();
