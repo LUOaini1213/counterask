@@ -1,156 +1,115 @@
-/* Fuzzing the parser. The refusal loop that spun forever on "not too expensive"
-   was found by accident; this looks for the rest of that family on purpose.
-   Every case is written to a scratch file before it runs, so if the process
-   hangs the offending sentence is still on disk. */
-import { createRequire } from "module";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
-const require = createRequire(import.meta.url);
-const PUB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
-const E = require("../public/engine.js");
+// Sentences nobody wrote, by the thousand.
+//
+// parse_test.mjs pins down sentences a person thought of. This builds ones
+// nobody did — fragments from every pass of the parser, in random order and
+// random number — and checks the two things that must hold for every one of
+// them: the parser never throws, and a refused value never comes back as a
+// requirement. It also reports how often each pass fired, so a pass that
+// silently stopped matching shows up as a number, not as a missing failure.
+//
+// Borrowed as an idea from the parallel implementation on the cuizi-rewrite
+// branch, rewritten against this parser.
+//
+//   node scripts/fuzz.mjs            # 4000 sentences, seeded
+//   node scripts/fuzz.mjs 20000 7    # count, seed
 
-const SCRATCH = path.join(path.dirname(fileURLToPath(import.meta.url)), ".fuzz-current");
+import { readFileSync } from 'node:fs';
+import { Catalog, parseRequest } from '../public/engine.js';
+import { mulberry32 } from './bench.mjs';
 
-function rng(seed) {
-  let s = seed >>> 0;
-  return () => { s ^= s << 13; s >>>= 0; s ^= s >> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
+const cat = new Catalog(JSON.parse(
+  readFileSync(new URL('../public/data/catalog.json', import.meta.url), 'utf8')));
+
+const PRODUCTS = ['belt', 'wallet', 'running shoes', 'dress shirt', 'hoodie', 'wool socks', 'hiking boots', 'jeans', 'watch', 'sunglasses', 'a jacket', 'some shorts'];
+const FILLER = ["I'm looking for", 'find me', 'do you have', 'show me', 'can you recommend', 'I need', 'what about', 'any chance you have'];
+const TAIL = ['please', 'for my brother', 'for work', 'for the weekend', 'for a wedding', 'thanks', 'ideally', 'for my dad\'s birthday'];
+const BUDGET = ['under $40', 'between 20 and 30 dollars', 'not over $50', 'around $25', 'for less than 60 bucks', 'max $35', 'I have 40 dollars to spend', '$20-$30', 'over $100'];
+const SORT = ['cheapest', 'best rated', 'most popular', 'cheap'];
+const WAVE = ['any material is fine', "fit doesn't matter", 'no preference on closure', 'whatever fabric works', "I don't mind the sleeves"];
+const NEG = ['not', 'no', 'without', 'nothing with', "I don't want", 'skip the', 'avoid', 'anything but', 'other than'];
+const forms = [];
+for (const [facet, values] of Object.entries(cat.facetForms ?? {})) {
+  for (const [value, list] of Object.entries(values)) for (const form of list) forms.push({ facet, value, form });
 }
-const r = rng(Number(process.argv[2]) || 90210);
-const pick = (a) => a[Math.floor(r() * a.length)];
+const WORDS = ['nike', 'hood', 'logo', 'stripes', 'laces', 'snap', 'zip', 'blue', 'thick'];
 
-// Fragments drawn from every pass the parser has, plus the connective tissue
-// that makes them collide.
-const NEGATORS = ["not", "no", "nothing", "without", "avoid", "skip the",
-  "other than", "except", "anything but", "don't want", "isn't", "nothing with",
-  "nothing from", "not from", "not made of"];
-const MONEY = ["$40", "40 dollars", "$0", "$0.5", "40", "$999999", "$-5", "$40.999",
-  "40 bucks", "$", "$$40"];
-const BUDGET_LEAD = ["under", "not over", "nothing over", "over", "above", "around",
-  "about", "roughly", "up to", "at most", "at least", "between", "max", "budget is",
-  "less than", "more than", "I have", "in the"];
-const FACETY = ["material", "closure", "occasion", "fit", "price", "brand", "colour",
-  "the material", "materials"];
-const WAIVERS = ["any {f} is fine", "no preference on {f}", "{f} doesn't matter",
-  "not fussy about the {f}", "don't care about {f}", "whatever {f}"];
-const NOISE = ["the", "a", "and", "or", "but", "with", "for", "to", "of", "very",
-  "too", "really", "please", "um", "-", ",", "'", "\"", "$", "%", "(", ")", "!",
-  "no-show", "non-leather", "isn't", "can't", "won't", "size", "10", "41mm",
-  "XXL", "2-pack", "e", "aa"];
+const pick = (rng, arr) => arr[Math.floor(rng() * arr.length)];
 
-const VALUES = [];
-{
-  const voc = E.attributeVocabulary();
-  for (const f of E.FACETS) for (const o of voc[f]) VALUES.push(o.value);
-}
-const NOUNS = Array.from(new Set(E.CATALOG.map(p => p.family.toLowerCase())));
-const BRANDS = Array.from(new Set(E.CATALOG.map(p => p.brand)));
-
-function fragment() {
-  switch (Math.floor(r() * 8)) {
-    case 0: return pick(NEGATORS) + " " + pick(VALUES);
-    case 1: return pick(BUDGET_LEAD) + " " + pick(MONEY);
-    case 2: return pick(WAIVERS).replace("{f}", pick(FACETY));
-    case 3: return pick(VALUES);
-    case 4: return pick(NOUNS);
-    case 5: return pick(NEGATORS) + " " + pick(BRANDS);
-    case 6: return pick(NEGATORS) + " " + pick(NOISE);
-    default: return pick(NOISE);
-  }
-}
-
-function sentence() {
-  const n = 1 + Math.floor(r() * 9);
+function compose(rng) {
   const parts = [];
-  for (let i = 0; i < n; i++) parts.push(fragment());
-  let s = parts.join(r() < 0.15 ? ", " : " ");
-  if (r() < 0.1) s = s.toUpperCase();
-  if (r() < 0.06) s = s.repeat(3);
-  return s;
+  const truth = { refused: [] };
+  const fired = new Set();
+  if (rng() < 0.7) { parts.push(pick(rng, FILLER)); fired.add('filler'); }
+  parts.push(pick(rng, PRODUCTS));
+  const n = Math.floor(rng() * 4);
+  for (let i = 0; i < n; i++) {
+    const r = rng();
+    if (r < 0.3) { const f = pick(rng, forms); parts.push(f.form); fired.add('stated'); }
+    else if (r < 0.55) {
+      const f = pick(rng, forms);
+      parts.push(`${pick(rng, NEG)} ${f.form}`);
+      truth.refused.push(f);
+      fired.add('refusal');
+    } else if (r < 0.7) { parts.push(`${pick(rng, NEG)} ${pick(rng, WORDS)}`); fired.add('refusal-word'); }
+    else if (r < 0.85) { parts.push(pick(rng, BUDGET)); fired.add('budget'); }
+    else if (r < 0.93) { parts.push(pick(rng, WAVE)); fired.add('waved'); }
+    else { parts.push(pick(rng, SORT)); fired.add('sort'); }
+  }
+  if (rng() < 0.5) { parts.push(pick(rng, TAIL)); fired.add('tail'); }
+  // Random joiners: commas, dashes, nothing.
+  const joiners = [', ', ' ', ' — ', ' and ', '; '];
+  let s = parts[0];
+  for (let i = 1; i < parts.length; i++) s += pick(rng, joiners) + parts[i];
+  if (rng() < 0.3) s = s.toUpperCase();
+  return { sentence: s, truth, fired };
 }
 
-const N = Number(process.env.FUZZ_N || 4000);
-let slowest = { ms: 0, s: "" };
-const problems = [];
-
-function note(s, msg) {
-  problems.push({ s, msg });
-  console.log("  PROBLEM  " + msg + "\n           input: " + JSON.stringify(s.slice(0, 160)));
-}
-
-for (let i = 0; i < N; i++) {
-  const s = sentence();
-  fs.writeFileSync(SCRATCH, s);           // survives a hang
-  const t = process.hrtime.bigint();
-  let u;
-  try {
-    u = E.parse(s);
-  } catch (err) {
-    note(s, "parse threw: " + err.message);
-    continue;
-  }
-  const ms = Number(process.hrtime.bigint() - t) / 1e6;
-  if (ms > slowest.ms) slowest = { ms, s };
-  if (ms > 250) note(s, "parse took " + ms.toFixed(0) + " ms");
-
-  // invariants the rest of the engine relies on
-  if (!Array.isArray(u.attributes) || !Array.isArray(u.exclusions) || !Array.isArray(u.terms))
-    note(s, "understood is malformed");
-  if (u.budget && u.budget.min != null && u.budget.max != null && u.budget.min > u.budget.max)
-    note(s, "budget inverted: " + JSON.stringify(u.budget));
-  if (u.budget && (Number.isNaN(u.budget.min) || Number.isNaN(u.budget.max)))
-    note(s, "budget is NaN: " + JSON.stringify(u.budget));
-  for (const w of u.bannedWords) {
-    if (!w || !w.trim()) note(s, "banned an empty word");
-    if (w.length === 1) note(s, "banned a single character: " + JSON.stringify(w));
-  }
-  for (const t2 of u.terms) if (!t2 || !t2.trim()) note(s, "kept an empty term");
-  for (const a of u.attributes) {
-    if (!E.FACETS.includes(a.facet)) note(s, "attribute on unknown facet: " + a.facet);
-  }
-
-  // the whole pipeline, not just the parse
-  let res;
-  try {
-    res = E.search(s, null);
-  } catch (err) {
-    note(s, "search threw: " + err.message);
-    continue;
-  }
-  if (!["answer", "need_more_evidence"].includes(res.status))
-    note(s, "unknown status: " + res.status);
-  if (res.candidates < 0 || res.candidates > E.CATALOG.length)
-    note(s, "impossible candidate count: " + res.candidates);
-  if (res.status === "need_more_evidence") {
-    if (!res.options || !res.options.length) note(s, "asked with no options");
-    if (res.candidates <= 12) note(s, "asked with only " + res.candidates + " candidates");
-    if (res.options.some(o => o.count <= 0)) note(s, "offered an option nothing matches");
-  }
-  if (res.products.length > 24) note(s, "returned more than a page");
-
-  // answering must terminate and must never widen the pool
-  let guard = 0, prev = res.candidates;
-  let st = { understood: res.understood, asked: res.asked, answers: res.answers,
-    waived: res.waived, pendingFacet: res.facet };
-  while (res.status === "need_more_evidence" && guard++ < 10) {
-    const vals = r() < 0.2 ? ["no_preference"] : [pick(res.options).value];
+export function fuzz({ n = 4000, seed = 2026 } = {}) {
+  const rng = mulberry32(seed);
+  const counts = { threw: 0, inverted: 0, emptyQuery: 0 };
+  const fired = {};
+  const read = { budget: 0, refusal: 0, stated: 0, waved: 0, sort: 0 };
+  const failures = [];
+  for (let i = 0; i < n; i++) {
+    const { sentence, truth, fired: f } = compose(rng);
+    for (const k of f) fired[k] = (fired[k] || 0) + 1;
+    let out;
     try {
-      res = E.answer(st, vals);
-    } catch (err) { note(s, "answer threw: " + err.message); break; }
-    if (res.candidates > prev) note(s, "answering widened the pool " + prev + " -> " + res.candidates);
-    prev = res.candidates;
-    st = { understood: res.understood, asked: res.asked, answers: res.answers,
-      waived: res.waived, pendingFacet: res.facet };
+      out = parseRequest(sentence, cat);
+    } catch (err) {
+      counts.threw++;
+      if (failures.length < 8) failures.push({ sentence, error: String(err) });
+      continue;
+    }
+    if (out.budget) read.budget++;
+    if (Object.keys(out.exclude).length || out.excludeTerms.length) read.refusal++;
+    if (Object.keys(out.constraints).length) read.stated++;
+    if (out.noPreference.length) read.waved++;
+    if (out.sort !== 'relevance') read.sort++;
+    if (!out.query && !Object.keys(out.constraints).length && !Object.keys(out.exclude).length) counts.emptyQuery++;
+    // A refusal that came back as a requirement, without the parser having
+    // flagged the collision: the one thing that must never happen.
+    for (const r of truth.refused) {
+      const clash = out.conflicts.some((c) => c.facet === r.facet && c.value === r.value);
+      if (out.constraints[r.facet]?.includes(r.value) && !clash) {
+        counts.inverted++;
+        if (failures.length < 8) failures.push({ sentence, inverted: `${r.facet}=${r.value}` });
+      }
+    }
   }
-  if (guard >= 10) note(s, "the conversation never settled");
-  if ((res.asked || []).length > 3) note(s, "asked " + res.asked.length + " questions");
-  const flat = (res.asked || []).filter(f => f !== "category");
-  if (new Set(flat).size !== flat.length)
-    note(s, "asked the same facet twice: " + JSON.stringify(res.asked));
+  return { n, counts, fired, read, failures };
 }
 
-fs.rmSync(SCRATCH, { force: true });
-console.log("\n" + N + " fuzzed sentences, " + problems.length + " problems");
-console.log("slowest parse " + slowest.ms.toFixed(1) + " ms: " +
-  JSON.stringify(slowest.s.slice(0, 90)));
-process.exit(problems.length ? 1 : 0);
+if (/[\\/]fuzz\.mjs$/.test(process.argv[1] ?? '')) {
+  const n = Number(process.argv[2]) || 4000;
+  const seed = Number(process.argv[3]) || 2026;
+  const r = fuzz({ n, seed });
+  console.log(`${r.n} sentences, seed ${seed}`);
+  console.log('  never threw:', r.counts.threw === 0 ? 'yes' : `NO — ${r.counts.threw}`);
+  console.log('  refusal inverted into a requirement:', r.counts.inverted);
+  console.log('  read as nothing at all:', r.counts.emptyQuery);
+  console.log('  passes fired (composed → read):',
+    Object.entries(r.read).map(([k, v]) => `${k} ${v}`).join(', '));
+  for (const f of r.failures) console.log('  FAIL', JSON.stringify(f));
+  if (r.counts.threw || r.counts.inverted) process.exitCode = 1;
+}

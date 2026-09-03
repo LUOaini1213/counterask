@@ -1,5 +1,3 @@
 node_modules/
-scripts/.fuzz-current
-scripts/.engine-lookahead.cjs
-scripts/.policy-lookahead.cjs
 .DS_Store
+*.log

@@ -1,7 +1,14 @@
-name: test and publish
+# Publish public/ to GitHub Pages on every push to main.
+#
+# The storefront is static — retrieval, parsing and the stopping policy run
+# in the tab — so a live URL is nothing more than serving that folder. Enable
+# Pages once in the repository settings (Build and deployment → Source:
+# GitHub Actions) and this workflow does the rest.
+name: pages
 
 on:
-  push: { branches: [main] }
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -9,24 +16,31 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: npm install
+        with:
+          node-version: 22
       - run: npm test
-      - uses: actions/upload-pages-artifact@v3
-        with: { path: public }
 
-  publish:
+  deploy:
     needs: test
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - id: deploy
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - id: deployment
         uses: actions/deploy-pages@v4
