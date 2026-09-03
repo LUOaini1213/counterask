@@ -282,6 +282,7 @@ export function parseRequest(text, catalog) {
     }
   }
 
+  pass = 'budget';
   // Budget first: "not over $50" is a ceiling, not a refusal.
   for (const [re, fn] of BUDGET_RULES) {
     const m = re.exec(s);

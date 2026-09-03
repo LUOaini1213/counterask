@@ -90,8 +90,10 @@ async function boot() {
     const result = placeOrder({ name: data.get('name'), address: data.get('address') });
     if (e.agentInvoked && typeof e.respondWith === 'function') e.respondWith(Promise.resolve(result));
   });
-  renderCart();
+  // Restore before the first render of anything that persists, or the empty
+  // page would overwrite the saved visit before it is read.
   if (new URLSearchParams(location.search).get('agent') !== 'demo') restore();
+  renderCart();
 
   const ok = registerTools(api, logCall, undefined, renderTools);
   el('mcpdot').classList.toggle('on', ok);
