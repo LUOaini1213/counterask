@@ -1,106 +1,66 @@
-// Policy and retrieval measurement.
-//
-// Changing a stopping rule by feel is how you end up with a store that asks
-// three questions about a wallet. This prints the numbers a change has to
-// move: which branch of decide() fires, how big the pools are, how long a
-// query takes, and how often the query's own words are being thrown away.
+/* What the store actually does across a spread of queries: how often it asks,
+   how big the pools are, and how long a search takes. */
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const E = require("../public/engine.js");
 
-import { readFileSync } from 'node:fs';
-import { Catalog, decide, separation, tokenize, parseRequest } from '../public/engine.js';
-
-const payload = JSON.parse(readFileSync(new URL('../public/data/catalog.json', import.meta.url), 'utf8'));
-const cat = new Catalog(payload);
-
-// Queries a shopper would actually type, across specific -> vague.
-export const QUERIES = [
-  'belt', 'leather belt', 'black leather dress belt', 'ratchet belt',
-  'wallet', 'rfid wallet', 'slim leather wallet',
-  'running shoes', 'waterproof hiking boots', 'dress shoes', 'loafers',
-  'sneakers', 'work boots', 'sandals',
-  't-shirt', 'cotton t shirt', 'long sleeve shirt', 'dress shirt',
-  'flannel shirt', 'polo shirt', 'hoodie', 'wool sweater', 'fleece jacket',
-  'winter coat', 'rain jacket', 'puffer jacket',
-  'jeans', 'slim fit jeans', 'chinos', 'cargo pants', 'shorts', 'swim trunks',
-  'socks', 'wool socks', 'boxer briefs', 'pajamas',
-  'watch', 'leather watch', 'sunglasses', 'baseball cap', 'beanie',
-  'backpack', 'duffel bag', 'gym shorts', 'athletic socks',
-  'tie', 'bow tie', 'suspenders', 'gloves', 'scarf',
+const QUERIES = [
+  "belt", "leather belt", "wallet", "running shoes", "hiking boots", "sneakers",
+  "dress shoes", "sweater", "shirt", "jacket", "chinos", "socks", "backpack",
+  "watch", "gloves", "cap", "tie", "wool sweater", "cotton shirt", "nylon jacket",
+  "waterproof jacket", "leather wallet", "slim wallet", "a belt under $30",
+  "a jacket under $100", "shoes for the office", "something for the gym",
+  "boots for hiking", "a shirt for a wedding", "cheapest wool sweater",
+  "best rated leather belt", "most popular backpack",
+  "a wallet that is not leather, under $30",
+  "waterproof hiking boots, no laces",
+  "I'm looking for a leather belt, nothing with a snap, not over $50",
+  "a jacket, not from Ridgeline, between 80 and 150 dollars",
+  "hiking boots, any material is fine", "a watch, nothing over $200",
+  "no-show socks", "a sweater, no wool and no acrylic",
+  "insulated gloves under $40", "a canvas backpack for work",
+  "silk tie under $50", "running shoes but not for the gym",
+  "a cap, no snap", "a linen shirt", "suede boots", "denim jacket",
+  "a belt that isn't leather"
 ];
 
-function branchOf(d) {
-  if (d.action === 'empty') return 'empty';
-  if (d.action === 'ask') return 'ask';
-  const r = (d.reasons || []).join(' ');
-  if (r.includes('small enough')) return 'answer:small-pool';
-  if (r.includes('clear of the runner-up')) return 'answer:clear-leader';
-  if (r.includes('Already asked')) return 'answer:budget';
-  if (r.includes('meaningfully reorder')) return 'answer:no-good-question';
-  return 'answer:other';
-}
+let asked = 0, answered = 0, poolSum = 0, turnsSum = 0, emptied = 0;
+const askedAbout = new Map();
+const t0 = process.hrtime.bigint();
+let searches = 0;
 
-export function run(queries = QUERIES, { verbose = false } = {}) {
-  const branches = new Map();
-  const pools = [];
-  const seps = [];
-  let totalMs = 0;
-  let droppedTerms = 0;
-  let totalTerms = 0;
-  const rows = [];
-
-  for (const q of queries) {
-    const t0 = performance.now();
-    // Same path the app takes: what the shopper already said is known.
-    const req = parseRequest(q, cat);
-    const stated = req.constraints;
-    const scored = cat.search(req.query, stated, req);
-    const d = decide(cat, scored, stated, 0);
-    totalMs += performance.now() - t0;
-
-    const b = branchOf(d);
-    branches.set(b, (branches.get(b) || 0) + 1);
-    pools.push(d.pool.length);
-    seps.push(separation(scored));
-
-    // How much of what the shopper typed actually reached a candidate?
-    // Compare like with like: the engine matches stemmed tokens, so the
-    // question is how many of the *normalised* terms reached the top hit.
-    const terms = tokenize(q);
-    const used = new Set(scored[0]?.matched ?? []);
-    totalTerms += terms.length;
-    droppedTerms += terms.filter((t) => !used.has(t)).length;
-
-    rows.push({ q, pool: d.pool.length, branch: b, sep: separation(scored) });
+for (const q of QUERIES) {
+  let res = E.search(q, null);
+  searches++;
+  const first = res.status;
+  if (first === "need_more_evidence") {
+    asked++;
+    askedAbout.set(res.facet, (askedAbout.get(res.facet) || 0) + 1);
+  } else {
+    answered++;
   }
-
-  pools.sort((a, b) => a - b);
-  const median = pools[Math.floor(pools.length / 2)];
-  const p90 = pools[Math.floor(pools.length * 0.9)];
-
-  const summary = {
-    queries: queries.length,
-    askRate: `${((branches.get('ask') || 0) / queries.length * 100).toFixed(0)}%`,
-    poolMedian: median,
-    poolP90: p90,
-    poolMax: pools[pools.length - 1],
-    emptyResults: branches.get('empty') || 0,
-    sepMedian: +(seps.slice().sort((a, b) => a - b)[Math.floor(seps.length / 2)]).toFixed(3),
-    sepAbove18pct: seps.filter((s) => s >= 0.18).length,
-    unmatchedQueryTerms: `${(100 * droppedTerms / Math.max(totalTerms, 1)).toFixed(0)}%`,
-    msPerQuery: +(totalMs / queries.length).toFixed(2),
-  };
-
-  if (verbose) {
-    console.table([...branches.entries()].map(([branch, n]) => ({ branch, n })));
-    console.log('\nworst pools:');
-    for (const r of rows.sort((a, b) => b.pool - a.pool).slice(0, 8)) {
-      console.log(`  ${String(r.pool).padStart(4)}  ${r.branch.padEnd(24)} ${r.q}`);
-    }
-    console.log('\nempty / near-empty:');
-    for (const r of rows.filter((r) => r.pool <= 2)) console.log(`  ${String(r.pool).padStart(4)}  ${r.q}`);
+  let turns = 1;
+  while (res.status === "need_more_evidence" && turns < 6) {
+    res = E.answer({ understood: res.understood, asked: res.asked, answers: res.answers,
+      waived: res.waived, pendingFacet: res.facet }, [res.options[0].value]);
+    searches++;
+    turns++;
   }
-  return summary;
+  turnsSum += turns;
+  poolSum += res.candidates;
+  if (res.candidates === 0) emptied++;
 }
+const ms = Number(process.hrtime.bigint() - t0) / 1e6;
 
-if (process.argv[1]?.endsWith('eval.mjs')) {
-  console.log(run(QUERIES, { verbose: true }));
-}
+console.log(QUERIES.length + " queries over " + E.CATALOG.length.toLocaleString() + " products\n");
+console.log("  asks a question first        " + asked + " (" +
+  Math.round(asked / QUERIES.length * 100) + "%)");
+console.log("  answers straight away        " + answered);
+console.log("  mean turns to an answer      " + (turnsSum / QUERIES.length).toFixed(2));
+console.log("  mean final candidates        " + (poolSum / QUERIES.length).toFixed(1));
+console.log("  emptied the catalog          " + emptied);
+console.log("\n  what it asks about");
+for (const [f, n] of Array.from(askedAbout).sort((a, b) => b[1] - a[1]))
+  console.log("    " + (E.FACET_LABEL[f] || f).padEnd(14) + n);
+console.log("\n  " + searches + " retrievals in " + ms.toFixed(0) + " ms  \u2014  " +
+  (ms / searches).toFixed(2) + " ms each");

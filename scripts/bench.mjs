@@ -1,134 +1,65 @@
-// Ground truth for Counterask.
-//
-// Every other script here measures proxies — how big the pool is, how often
-// the store asks. None of them can tell "better" from "merely smaller". This
-// one can: pick a product, write the query a shopper looking for *that*
-// product would type, and see whether the store finds it.
-//
-// The shopper is simulated the way the TechJam harness simulates one: they
-// know what they want, so when the store asks about an attribute they answer
-// truthfully from the target's own record, and say "no preference" when the
-// target does not carry that attribute at all.
-//
-//   node scripts/bench.mjs            # 400 targets, seeded
-//   node scripts/bench.mjs 1000       # more targets
+/* Retrieval and listening, on self-supervised ground truth. See lib/sessions
+   for how a case is built; --holdout re-runs the same targets under phrasings
+   the parser was never tuned on. */
+import { E, rng, makeCase, converse, sessions, score, f3 } from "./lib/sessions.mjs";
 
-import { readFileSync } from 'node:fs';
-import { Catalog, decide, parseRequest, tokenize } from '../public/engine.js';
+const holdout = process.argv.includes("--holdout");
+const N = Number(process.argv.find(a => /^\d+$/.test(a))) || 800;
 
-const cat = new Catalog(JSON.parse(
-  readFileSync(new URL('../public/data/catalog.json', import.meta.url), 'utf8')));
-
-// Deterministic sampling, so a change in the ranker is the only thing that can
-// move the numbers between two runs.
-export function mulberry32(a) {
-  return () => {
-    a |= 0; a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+/* the baseline: a search box. every content word must appear in the title. */
+function keywordSearch(sentence) {
+  const words = sentence.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+  return E.CATALOG.map(p => {
+    const t = p.title.toLowerCase();
+    let s = 0;
+    for (const w of words) if (t.includes(w)) s += 3;
+    s += Math.log10(p.reviews + 1) * 0.7;
+    return { p, s };
+  }).filter(x => x.s > 1).sort((a, b) => b.s - a.s).map(x => x.p);
 }
 
-// The query a shopper types is not the product's full title — it is the two or
-// three words they remember. Taking the *rarest* title terms would be cheating
-// (a unique brand name makes retrieval trivial); taking the most common ones
-// would be unfair. Take the middle: skip the single rarest term, then keep the
-// next few, which is roughly "category plus one distinguishing word".
-export function queryFor(item, rng, catalog = cat) {
-  const terms = [...new Set(tokenize(item.t))]
-    .map((t) => ({ t, df: catalog.postings.get(t)?.length ?? 0 }))
-    .filter((x) => x.df > 0)
-    .sort((a, b) => a.df - b.df);
-  if (terms.length < 2) return null;
-  const body = terms.slice(1);                 // drop the rarest — too easy
-  const take = 2 + Math.floor(rng() * 2);      // 2 or 3 words
-  return body.slice(0, take).map((x) => x.t).join(' ');
-}
+const rows = sessions(N, { seed: holdout ? 77003 : 4242, holdout });
+const parser = score(rows);
 
-// A shopper who knows what they want: answer from the target, or decline.
-export function answerAs(target, facet, ask = null) {
-  const have = target.f[facet];
-  if (!have?.length) return null;
-  // A category question is asked one level at a time: answer with the
-  // target's node at that level, or "no preference" when its path is shorter.
-  const value = facet === 'kind' && ask?.level != null
-    ? (ask.level === 'leaf' ? have[have.length - 1] : (have[ask.level] ?? null))
-    : have[0];
-  // SHOPPER=menu: a person who can only pick from the four options on screen,
-  // and says "no preference" when theirs is not among them. The default is
-  // an oracle who can name any value the catalogue knows, as an agent can.
-  if (process.env.SHOPPER === 'menu' && value != null && ask?.options && !ask.options.some((o) => o.value === value)) return null;
-  return value;
-}
+// the same sentences through the keyword matcher
+const kw = { hit10: 0, hit1: 0, mrr: 0 };
+const fail = { refusalInverted: 0, refusedShown: 0, budgetBroken: 0, reAskedWaived: 0 };
+const kwFail = { refusalInverted: 0, refusedShown: 0, budgetBroken: 0 };
 
-// `patience` is the chance a shopper bothers to answer a question at all.
-// At 1.0 they are an oracle: every question is answered instantly and
-// correctly, asking costs nothing, and the benchmark will always prefer a
-// store that interrogates. Real shoppers shrug. Sweeping this is what turns
-// "how much should it ask" from taste back into a measurement.
-export function bench({ n = 400, seed = 2026, maxAsks = 3, patience = 1 } = {}) {
-  const rng = mulberry32(seed);
-  const stats = { n: 0, hit10: 0, hit1: 0, rrSum: 0, turnSum: 0, asked: 0, unanswerable: 0 };
-  const misses = [];
+for (const row of rows) {
+  const { c, res } = row;
+  const k = keywordSearch(c.sentence);
+  const at = k.findIndex(p => p.id === c.target.id);
+  if (at >= 0 && at < 10) kw.hit10++;
+  if (at === 0) kw.hit1++;
+  if (at >= 0) kw.mrr += 1 / (at + 1);
 
-  for (let tries = 0; stats.n < n && tries < n * 6; tries++) {
-    const target = cat.items[Math.floor(rng() * cat.items.length)];
-    const query = queryFor(target, rng);
-    if (!query) continue;
-
-    // The production path, exactly: the sentence parser first, even though a
-    // keyword query has no budget or refusal in it for the parser to find.
-    const req = parseRequest(query, cat);
-    let constraints = req.constraints;
-    const declined = [];
-    let asks = 0;
-    let scored = cat.search(req.query, constraints, req);
-
-    // Run the real loop: the policy asks, the simulated shopper answers.
-    for (;;) {
-      const d = decide(cat, scored, constraints, asks, { declined });
-      if (d.action !== 'ask' || asks >= maxAsks) break;
-      const value = rng() < patience ? answerAs(target, d.facet, d) : null;
-      asks++;
-      if (value === null) {
-        // "No preference" — the store must not filter on it, and must not
-        // ask it again. It may still ask something else.
-        declined.push(d.facet);
-        continue;
-      }
-      constraints = { ...constraints, [d.facet]: [value] };
-      scored = cat.search(req.query, constraints, req);
-    }
-
-    const rank = scored.findIndex((s) => s.item.id === target.id) + 1;
-    stats.n++;
-    stats.asked += asks;
-    stats.turnSum += asks + 1;               // the search itself is a turn
-    if (rank === 1) stats.hit1++;
-    if (rank >= 1 && rank <= 10) { stats.hit10++; stats.rrSum += 1 / rank; }
-    else misses.push({ query, rank, title: target.t.slice(0, 58), pool: scored.length });
+  if (c.refusal) {
+    if (res.understood.attributes.some(a => a.value === c.refusal.value)) fail.refusalInverted++;
+    if (res.products.slice(0, 10).some(p => (p.attrs[c.refusal.facet] || []).includes(c.refusal.value))) fail.refusedShown++;
+    kwFail.refusalInverted++;   // a keyword matcher has no concept of a refusal at all
+    if (k.slice(0, 10).some(p => (p.attrs[c.refusal.facet] || []).includes(c.refusal.value))) kwFail.refusedShown++;
   }
-
-  return {
-    summary: {
-      targets: stats.n,
-      'Hit@10': +(stats.hit10 / stats.n).toFixed(4),
-      'Hit@1': +(stats.hit1 / stats.n).toFixed(4),
-      MRR: +(stats.rrSum / stats.n).toFixed(4),
-      meanTurns: +(stats.turnSum / stats.n).toFixed(3),
-      askRate: `${(100 * stats.asked / stats.n).toFixed(0)}%`,
-    },
-    misses,
-  };
-}
-
-if (/[\\/]bench\.mjs$/.test(process.argv[1] ?? '')) {
-  const n = Number(process.argv[2]) || 400;
-  const { summary, misses } = bench({ n });
-  console.log(summary);
-  console.log(`\nmissed ${misses.length} (target not in top 10):`);
-  for (const m of misses.slice(0, 10)) {
-    console.log(`  rank=${String(m.rank || '-').padStart(5)} pool=${String(m.pool).padStart(4)}  "${m.query}"  ->  ${m.title}`);
+  if (c.budget != null) {
+    if (res.products.slice(0, 10).some(p => p.price != null && p.price > c.budget)) fail.budgetBroken++;
+    if (k.slice(0, 10).some(p => p.price != null && p.price > c.budget)) kwFail.budgetBroken++;
   }
+  const waived = new Set(res.waived || []);
+  for (const f of (res.asked || [])) if (waived.has(f) && res.asked.filter(x => x === f).length > 1) fail.reAskedWaived++;
 }
+
+const pct = (x) => (x / N).toFixed(3);
+console.log(`${N} sentences${holdout ? " (held-out phrasings the parser was never tuned on)" : ""}\n`);
+console.log("keyword matcher".padEnd(18) + `Hit@10 ${pct(kw.hit10)}  Hit@1 ${pct(kw.hit1)}  MRR ${pct(kw.mrr)}`);
+console.log("sentence parser".padEnd(18) + `Hit@10 ${f3(parser.hit10)}  Hit@1 ${f3(parser.hit1)}  MRR ${f3(parser.mrr)}  turns ${parser.turns.toFixed(2)}`);
+console.log("\nlistening checks                          keyword   parser");
+const line = (l, a, b) => console.log(l.padEnd(42) + String(a).padStart(7) + String(b).padStart(9));
+line("refusals inverted into requirements", kwFail.refusalInverted, fail.refusalInverted);
+line("refused value shown in top 10", kwFail.refusedShown, fail.refusedShown);
+line("budget broken in top 10", kwFail.budgetBroken, fail.budgetBroken);
+line("re-asked after \u201cno preference\u201d", "\u2014", fail.reAskedWaived);
+console.log("\nwhere the remaining loss is:");
+console.log("  target wrongly filtered out      " + (100 - parser.survived * 100).toFixed(1) + "% of cases");
+console.log("  final candidates, mean           " + parser.pool.toFixed(1));
+console.log("  Hit@10 if ranking inside the pool were random   " + f3(parser.ceiling));
+console.log("  Hit@10 actually achieved                       " + f3(parser.hit10));
