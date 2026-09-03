@@ -72,7 +72,9 @@ const search = ctx.tools.get('search_products');
 assert.deepEqual(search.inputSchema.required, ['query']);
 assert.deepEqual(Object.keys(search.inputSchema.properties).sort(),
   ['attributes', 'budget_max', 'budget_min', 'exclude', 'no_preference', 'query', 'sort']);
+const settle = () => new Promise((r) => setTimeout(r, 5));
 let wire = await search.execute({ query: 'a leather belt', budget_max: 30, no_preference: ['origin'] });
+await settle();
 assert.deepEqual(calls.at(-1), ['search', 'a leather belt', 'agent', { budget_max: 30, no_preference: ['origin'] }]);
 
 // On the wire, both conventions at once: MCP text content and the object.
@@ -86,6 +88,7 @@ assert.ok(ctx.tools.has('answer_question'), 'a question is open, so answer_quest
 assert.ok(seen.at(-1).includes('answer_question'), 'the page was told answer_question appeared');
 const answer = ctx.tools.get('answer_question');
 r = (await answer.execute({ values: ['leather', 'suede'] })).structuredContent;
+await settle();
 assert.deepEqual(calls.at(-1), ['answer', ['leather', 'suede'], 'agent']);
 assert.equal(r.status, 'answer');
 assert.ok(!ctx.tools.has('answer_question'), 'answered, so answer_question must be gone again — via the abort signal');
@@ -93,8 +96,10 @@ assert.ok(!seen.at(-1).includes('answer_question'), 'the page was told it went')
 
 // A second question registers it again without tripping the duplicate check.
 await search.execute({ query: 'belt' });
+await settle();
 assert.ok(ctx.tools.has('answer_question'));
 await ctx.tools.get('answer_question').execute({ value: 'no_preference' });
+await settle();
 assert.deepEqual(calls.at(-1), ['answer', ['no_preference'], 'agent']);
 assert.ok(!ctx.tools.has('answer_question'));
 

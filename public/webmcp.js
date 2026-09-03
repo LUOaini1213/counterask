@@ -69,10 +69,16 @@ export function registerTools(api, onCall, ctx = context(), onTools = null) {
   // for a client that reads tool results the way MCP clients do, and
   // `structuredContent` carries the object itself for one that takes JSON.
   // Whichever convention the browser follows, the agent sees the same thing.
+  //
+  // The tool list is changed *after* the call returns, on a macrotask. Chrome
+  // 152's native implementation rejects an executeTool whose tool is aborted
+  // while its own execute is still running ("The operation failed for an
+  // unknown transient reason"), which is exactly what answer_question did to
+  // itself; the stand-in never minded.
   const traced = (name, fn) => async (args) => {
     const result = await fn(args ?? {});
-    await syncAnswerTool(result);
     onCall?.(name, result);
+    setTimeout(() => { syncAnswerTool(result).catch((err) => console.warn('WebMCP tool sync failed', err)); }, 0);
     return {
       content: [{ type: 'text', text: JSON.stringify(result) }],
       structuredContent: result,
