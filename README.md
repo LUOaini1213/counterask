@@ -119,7 +119,7 @@ A parser tuned on its own templates can pass while failing the next phrasing
 a person tries, so the same 800 targets are also run under a second set of
 phrasings it was never tuned on (`--holdout`: "skip the", "avoid", "max $40",
 "I have 40 dollars to spend", "in the $20-$30 range", "not fussy about the
-closure"…). Those score Hit@10 0.998 with the same zero failures. And 56
+closure"…). Those score Hit@10 0.998 with the same zero failures. And 61
 hand-written sentences in
 [`scripts/parse_test.mjs`](scripts/parse_test.mjs) pin down what must be read
 and what must be left alone: *no-show socks* refuse nothing, *size 10* is not a
