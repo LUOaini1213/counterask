@@ -72,7 +72,8 @@ const search = ctx.tools.get('search_products');
 assert.deepEqual(search.inputSchema.required, ['query']);
 assert.deepEqual(Object.keys(search.inputSchema.properties).sort(),
   ['attributes', 'budget_max', 'budget_min', 'exclude', 'no_preference', 'query', 'sort']);
-const settle = () => new Promise((r) => setTimeout(r, 5));
+// A closed question keeps its tool for a moment (see webmcp.js); wait it out.
+const settle = () => new Promise((r) => setTimeout(r, 1700));
 let wire = await search.execute({ query: 'a leather belt', budget_max: 30, no_preference: ['origin'] });
 await settle();
 assert.deepEqual(calls.at(-1), ['search', 'a leather belt', 'agent', { budget_max: 30, no_preference: ['origin'] }]);

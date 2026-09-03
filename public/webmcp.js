@@ -15,6 +15,10 @@
 
 const context = () => document.modelContext ?? navigator.modelContext ?? null;
 
+// How long a closed question keeps its answer_question tool registered, so
+// the browser can finish delivering the call that closed it.
+const POLICY_UNREGISTER_DELAY = 1500;
+
 const FACETS = ['material', 'closure', 'sleeve', 'fit', 'care', 'origin', 'sole', 'occasion', 'pocket', 'waterproof', 'color', 'kind'];
 
 const facetMap = (what) => ({
@@ -70,15 +74,23 @@ export function registerTools(api, onCall, ctx = context(), onTools = null) {
   // `structuredContent` carries the object itself for one that takes JSON.
   // Whichever convention the browser follows, the agent sees the same thing.
   //
-  // The tool list is changed *after* the call returns, on a macrotask. Chrome
-  // 152's native implementation rejects an executeTool whose tool is aborted
-  // while its own execute is still running ("The operation failed for an
-  // unknown transient reason"), which is exactly what answer_question did to
-  // itself; the stand-in never minded.
+  // Registering answer_question happens as soon as a question opens.
+  // *Unregistering* it is deferred: Chrome 152's native implementation
+  // rejects an executeTool whose tool is aborted while the browser is still
+  // finishing that call ("The operation failed for an unknown transient
+  // reason"), and a macrotask later was still too soon. So a closed question
+  // takes its tool away a moment later, and at the latest at the start of
+  // the next call. The stand-in never minded either way.
+  let lastResult = null;
+  let unregisterTimer = null;
+  const settle = () => syncAnswerTool(lastResult).catch((err) => console.warn('WebMCP tool sync failed', err));
   const traced = (name, fn) => async (args) => {
+    if (unregisterTimer) { clearTimeout(unregisterTimer); unregisterTimer = null; await settle(); }
     const result = await fn(args ?? {});
     onCall?.(name, result);
-    setTimeout(() => { syncAnswerTool(result).catch((err) => console.warn('WebMCP tool sync failed', err)); }, 0);
+    lastResult = result;
+    if (result?.status === 'need_more_evidence') await settle();
+    else unregisterTimer = setTimeout(() => { unregisterTimer = null; settle(); }, POLICY_UNREGISTER_DELAY);
     return {
       content: [{ type: 'text', text: JSON.stringify(result) }],
       structuredContent: result,
