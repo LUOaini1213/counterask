@@ -204,6 +204,7 @@ const FACET_WORDS = {
   occasion: ['occasion', 'occasions'],
   pocket: ['pockets', 'pocket'],
   kind: ['kind', 'category', 'type', 'style'],
+  color: ['color', 'colour', 'colors', 'colours', 'shade'],
 };
 const FACET_WORD = Object.entries(FACET_WORDS)
   .flatMap(([facet, words]) => words.map((w) => [w, facet]))
@@ -369,6 +370,10 @@ export function parseRequest(text, catalog) {
   // optional, so the title is not required to repeat what the filter already
   // guarantees. Requiring it shrank "something for the gym" from every
   // athletic item to the 48 whose title happens to say "gym".
+  // Keeping product-type words ("running") required while the rest went
+  // optional was tried against the rebuilt catalogue and measured worse on
+  // every run (keyword Hit@1 -0.009, agent Hit@10 -0.003): the pool it kept
+  // out was mostly the right products under other titles.
   for (const h of findForms(s, catalog.facetValues, catalog.facetForms)) {
     const list = (out.constraints[h.facet] ??= []);
     if (!list.includes(h.value)) list.push(h.value);
@@ -1035,6 +1040,7 @@ function phrase(facet, options, ask = {}) {
     occasion: `What is the occasion — ${list}?`,
     pocket: `Do you need ${list}?`,
     waterproof: `Should it be ${list}?`,
+    color: `Which color — ${list}?`,
     kind: (() => {
       const h = ask.ancestor ? head(ask.ancestor) : null;
       const clashes = h && options.some((o) => (o.label ?? o.value) === h);

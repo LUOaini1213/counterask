@@ -77,6 +77,11 @@ const CASES = [
   ['boots, no laces to tie', { exclude: { closure: ['lace-up'] }, excludeTerms: ['lace'], bansNot: ['tie'] }],
   ['a shirt for work, not polyester', { exclude: { material: ['polyester'] }, optional: ['business', 'formal', 'office'], lacks: ['work'] }],
   ['shoes, not for work', { excludeTerms: ['work'], optional: [] }],
+  ['black leather belt', { constraints: { color: ['black'], material: ['leather'] }, has: ['belt'] }],
+  ['a hoodie, not black or navy', { exclude: { color: ['black', 'navy'] }, constraints: {} }],
+  ['sneakers, any colour is fine, under $60', { noPreference: ['color'], budget: { min: null, max: 60 } }],
+  ['faux leather jacket', { constraints: { material: ['faux leather'] } }],
+  ['a full zip fleece in grey', { constraints: { closure: ['zipper'], material: ['fleece'], color: ['grey'] } }],
 ];
 
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);

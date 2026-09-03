@@ -15,7 +15,7 @@
 
 const context = () => document.modelContext ?? navigator.modelContext ?? null;
 
-const FACETS = ['material', 'closure', 'sleeve', 'fit', 'care', 'origin', 'sole', 'occasion', 'pocket', 'waterproof', 'kind'];
+const FACETS = ['material', 'closure', 'sleeve', 'fit', 'care', 'origin', 'sole', 'occasion', 'pocket', 'waterproof', 'color', 'kind'];
 
 const facetMap = (what) => ({
   type: 'object',

@@ -125,7 +125,11 @@ hand-written sentences in
 and what must be left alone: *no-show socks* refuse nothing, *size 10* is not a
 budget, *41mm* is not $41, *Under Armour* is a brand.
 
-The two-word shopper benchmark did not move: Hit@10 0.996 before and after.
+Those numbers are from the catalogue build the parser was written against.
+On the rebuilt attribute index below, the same two benchmarks read: two-word
+shopper Hit@10 0.998 · Hit@1 0.849 · MRR 0.905; agent sentences Hit@10 0.993 ·
+Hit@1 0.904 · MRR 0.937 (held-out phrasings 0.991 · 0.900 · 0.935), listening
+checks still at zero.
 
 ## Why this is the right shape for WebMCP specifically
 
@@ -211,6 +215,34 @@ budget in turn, re-counts, and reports which one is doing the damage. The
 agent gets the list as `relax` ("lifting *material = linen / suede* leaves
 71"); the person gets the same options as buttons.
 
+## The attribute index
+
+The builder reads title, bullet points and details as one text and records
+every attribute value it can name. It used to match substrings, which is why
+it could not list "snap" (it would fire on "snapback") or "lace" ("shoelace"),
+and why "faux leather" counted as leather. It now matches whole words with
+the endings people add, longest form first and never overlapping — the same
+rule the page uses on a sentence, which is what keeps the index a superset of
+anything a shopper can say. Faux leather is its own value; closures gained
+slip-on, drawstring and elastic waist; occasions gained the sports; and a
+**color** facet was added from the same text.
+
+| facet | recorded before | after |
+|---|---:|---:|
+| material | 56% | 69% |
+| closure | 31% | 41% |
+| occasion | 25% | 35% |
+| fit | 8% | 9% |
+| color | — | 41% |
+
+Measured on the same two-word queries: Hit@10 0.995 → 0.998, Hit@1 0.841 →
+0.849, MRR 0.898 → 0.905, at +0.03 questions per session. The agent-sentence
+benchmark composes its sentences from the target's own attributes, so its
+sentences changed too (more to state, more to refuse); it reads Hit@10 0.993
+with every listening check still at zero. What the rebuild buys in the store
+is visible in the questions: *leather belt, buckle* now asks **Which color —
+black, brown, silver, gold?**, which no earlier build could ask.
+
 ## How the stopping policy works
 
 `decide()` in [`public/engine.js`](public/engine.js) answers when any of these hold:
@@ -261,14 +293,14 @@ What the built-in examples do:
 | Query | Read as | Candidates | Decision |
 |---|---|---:|---|
 | `belt` | — | 97 | **ask** — what material? |
-| `leather belt` | material = leather | 64 | answer — best question clears only ~8 |
-| `running shoes` | occasion = athletic | 496 | **ask** — what kind? |
-| `waterproof hiking boots, no laces` | water resistant, outdoor; **not** lace-up, "lace" banned | 56 | **ask** — what kind? |
-| `a wallet that is not leather, under $30` | **not** leather; ≤ $30 | 30 | **ask** — what kind? |
-| `cheapest wool sweater` | wool; cheapest first | 23 | **ask** — which kind of clothing? |
-| `…leather belt, nothing with a snap, not over $50` | leather; **not** snap; ≤ $50 | 58 | answer — differ by closure: 11 buckle, 1 pull-on |
+| `leather belt` | material = leather | 63 | answer — best question clears only ~8 |
+| `running shoes` | occasion = athletic | 728 | **ask** — which category? |
+| `waterproof hiking boots, no laces` | water resistant, outdoor; **not** lace-up, "lace" banned | 56 | **ask** — which category? |
+| `a wallet that is not leather, under $30` | **not** leather; ≤ $30 | 30 | **ask** — which kind of accessories? |
+| `cheapest wool sweater` | wool; cheapest first | 21 | **ask** — which category? |
+| `…leather belt, nothing with a snap, not over $50` | leather; **not** snap; ≤ $50 | 56 | answer — differ by closure: 10 buckle, 1 pull-on |
 
-`leather belt` is the one to look at. 64 candidates is a lot, and the store
+`leather belt` is the one to look at. 63 candidates is a lot, and the store
 still answers, because no recorded attribute separates them enough to be worth
 a turn — it says so, and says what little does differ. The policy asks when a
 question helps, not when the pool is merely large.
@@ -279,13 +311,14 @@ Two benchmarks, both self-supervised from the product records, both seeded:
 
 - [`scripts/bench.mjs`](scripts/bench.mjs) — the shopper a search box meets:
   two or three title words, truthful answers.
-  **Hit@10 0.996 · Hit@1 0.836 · MRR 0.896 · 1.10 turns.**
+  **Hit@10 0.998 · Hit@1 0.849 · MRR 0.905 · 1.13 turns.**
 - [`scripts/agentbench.mjs`](scripts/agentbench.mjs) — the caller an agent
   relays: a sentence with filler, stated attributes, a refusal, a budget.
-  **Hit@10 0.999 · Hit@1 0.901 · MRR 0.939 · 1.06 turns**, with every
-  listening check at zero failures (table above). Under held-out phrasings:
-  Hit@10 0.998 · Hit@1 0.899 · MRR 0.937, still zero failures.
-- [`scripts/parse_test.mjs`](scripts/parse_test.mjs) — 56 hand-written
+  **Hit@10 0.993 · Hit@1 0.904 · MRR 0.937 · 1.08 turns**, with every
+  listening check at zero failures. Under held-out phrasings: Hit@10 0.991 ·
+  Hit@1 0.900 · MRR 0.935, still zero failures. `SHOPPER=menu` runs either
+  benchmark with a shopper who can only pick from the four options shown.
+- [`scripts/parse_test.mjs`](scripts/parse_test.mjs) — 61 hand-written
   sentences with what the parser must and must not take from each.
 - [`scripts/fuzz.mjs`](scripts/fuzz.mjs) — 4,000 sentences nobody wrote,
   built from fragments of every pass in random order: the parser must never
@@ -302,8 +335,8 @@ person's patience or a missing attribute. That is why the ask threshold is
 set in absolute candidates removed, and why a "clear leader" shortcut is not
 shipped — those were the two places measurement said no.
 
-Retrieval is under a millisecond a query on a laptop; the whole storefront is
-a 0.54 MB download.
+Retrieval takes about two milliseconds a query on a laptop; the whole
+storefront is a 0.58 MB download.
 
 ## Running it
 
@@ -358,7 +391,7 @@ scripts/
   build_catalog.py  50,000-product source catalog -> browser index
   bench.mjs         ground truth, two-word shopper
   agentbench.mjs    ground truth, agent-relayed sentences (--holdout for unseen phrasings)
-  parse_test.mjs    56 hand-written sentences the parser must read, and must not over-read
+  parse_test.mjs    61 hand-written sentences the parser must read, and must not over-read
   tools_test.mjs    the WebMCP surface, with a stand-in modelContext
   smoke.mjs         policy behaviour on the sample queries
   eval.mjs          pool sizes, ask rate, timing across 50 queries
@@ -368,7 +401,7 @@ scripts/
 
 Products are the menswear slice (level-2 category `Men`) of the frozen
 50,000-product catalog derived from **Amazon Reviews 2023**, McAuley Lab, UCSD.
-9,901 items, 2.2 MB raw / 0.54 MB gzipped — the whole storefront ships to the
+9,901 items, 2.4 MB raw / 0.58 MB gzipped — the whole storefront ships to the
 client. Prices exist for one product in five; a budget excludes what is priced
 outside it and keeps what is unpriced, ranked after. There is no ranking model
 and no training: demand is proxied by log-scaled review volume, because a
