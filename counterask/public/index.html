@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Counterask — the store that asks back</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ground:#E4E6E1; --paper:#F2F3F0; --ink:#17222B; --oxblood:#7B2D26;
+  --graphite:#5C6570; --chalk:#F7F8F5; --rule:#C6CAC4;
+  --sans:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --serif:"Newsreader",Georgia,"Times New Roman",serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--ground); color:var(--ink); font-family:var(--sans);
+  font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
+}
+a{color:inherit}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--oxblood);outline-offset:2px}
+
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+
+/* header ------------------------------------------------------------- */
+header{border-bottom:1px solid var(--rule);padding:18px 0 16px}
+.headrow{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+.mark{font-family:var(--serif);font-size:26px;font-weight:400;letter-spacing:-.01em}
+.tagline{font-family:var(--serif);font-style:italic;font-weight:300;color:var(--graphite);font-size:17px}
+.badge{margin-left:auto;font-size:12.5px;padding:3px 9px;border:1px solid var(--rule);border-radius:2px;color:var(--graphite)}
+.badge.live{border-color:var(--ink);color:var(--ink)}
+
+/* search -------------------------------------------------------------- */
+.searchband{padding:26px 0 14px}
+#search{display:flex;gap:10px}
+#q{
+  flex:1;padding:13px 14px;border:1px solid var(--ink);background:var(--paper);
+  border-radius:2px;font:inherit;font-size:16px;
+}
+#q::placeholder{color:var(--graphite)}
+#search button{padding:13px 20px;border:1px solid var(--ink);background:var(--ink);color:var(--chalk);border-radius:2px}
+#reset{background:transparent;color:var(--graphite);border:1px solid var(--rule);padding:13px 14px;border-radius:2px}
+
+.examples{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 0}
+.examples button{
+  background:none;border:1px solid var(--rule);border-radius:2px;
+  padding:5px 10px;font-size:13px;color:var(--graphite);
+}
+.examples button:hover{border-color:var(--ink);color:var(--ink)}
+
+#understood{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 0}
+.chip{font-size:13px;padding:3px 9px;border-radius:2px;border:1px solid var(--rule)}
+.chip.want{border-color:var(--ink)}
+.chip.refuse{border-color:var(--oxblood);color:var(--oxblood)}
+.chip.budget,.chip.sort{border-style:dashed}
+.chip.waived,.chip.ignored{color:var(--graphite);border-color:transparent;padding-left:0}
+.chip.conflict{background:var(--oxblood);color:var(--chalk);border-color:var(--oxblood)}
+.chip.dropped{color:var(--graphite);border-color:var(--rule);text-decoration:line-through;text-decoration-thickness:1px}
+.chip.changed{border-color:var(--oxblood);color:var(--oxblood);font-style:italic}
+
+/* two columns ---------------------------------------------------------- */
+.cols{display:grid;grid-template-columns:344px 1fr;gap:40px;padding:24px 0 60px;align-items:start}
+@media (max-width:900px){.cols{grid-template-columns:1fr;gap:28px}}
+
+.rail{position:sticky;top:20px;display:flex;flex-direction:column;gap:22px}
+@media (max-width:900px){.rail{position:static}}
+
+/* the question — the one loud thing on the page ------------------------ */
+#question{background:var(--ink);color:var(--chalk);padding:22px 20px 18px;border-radius:2px}
+#question .ask{font-family:var(--serif);font-size:23px;line-height:1.32;font-weight:300;margin:0 0 16px}
+.options{display:flex;flex-wrap:wrap;gap:7px}
+.opt{
+  display:flex;align-items:baseline;gap:7px;background:transparent;color:var(--chalk);
+  border:1px solid rgba(247,248,245,.42);border-radius:2px;padding:7px 11px;
+}
+.opt:hover,.opt:focus-visible{background:var(--chalk);color:var(--ink);border-color:var(--chalk)}
+.opt-count{font-size:12px;opacity:.65}
+.opt.none{border-style:dashed}
+#question .note{font-size:12.5px;line-height:1.45;color:rgba(247,248,245,.62);margin:16px 0 0}
+
+/* why ------------------------------------------------------------------ */
+h2{font-size:13px;font-weight:600;margin:0 0 8px;color:var(--graphite)}
+#why{list-style:none;margin:0;padding:0;font-size:13.5px;color:var(--graphite)}
+#why li{padding:6px 0;border-top:1px solid var(--rule)}
+#why li:first-child{border-top:none}
+#why .differ{color:var(--ink)}
+.lift{background:none;border:1px solid var(--oxblood);color:var(--oxblood);border-radius:2px;padding:3px 8px;font-size:12.5px;margin:4px 4px 0 0}
+
+/* tools ---------------------------------------------------------------- */
+#tools{list-style:none;margin:0;padding:0;font-size:13px}
+.tool{display:flex;gap:8px;align-items:baseline;padding:4px 0;color:var(--graphite)}
+.tname{font-family:var(--sans);color:var(--ink)}
+.tool.live .tname{color:var(--oxblood);font-weight:600}
+.ro{font-size:11.5px;border:1px solid var(--rule);border-radius:2px;padding:0 4px}
+#tool-note{font-size:12.5px;color:var(--graphite);margin:8px 0 0;line-height:1.45}
+
+#log{list-style:none;margin:0;padding:0;font-size:12.5px;max-height:180px;overflow:auto}
+#log li{display:flex;gap:8px;padding:3px 0;border-top:1px solid var(--rule);align-items:baseline}
+.lname{color:var(--ink)}
+.largs{color:var(--graphite);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lstatus{margin-left:auto;font-size:11.5px}
+.lstatus.need_more_evidence{color:var(--oxblood)}
+
+/* grid ----------------------------------------------------------------- */
+.gridhead{display:flex;align-items:baseline;gap:14px;margin:0 0 14px;min-height:22px}
+#count{font-size:15px}
+#preview{font-size:13px;color:var(--oxblood)}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(228px,1fr));gap:0 22px}
+.card{border-top:1px solid var(--rule);padding:14px 0 16px;transition:opacity .18s}
+.card.culled{opacity:.16}
+.card h3{font-family:var(--serif);font-size:18px;font-weight:400;line-height:1.28;margin:0 0 6px}
+.card .meta{font-size:12.5px;color:var(--graphite);margin:0 0 10px}
+.card .foot{display:flex;flex-direction:column;gap:2px;margin:0 0 10px}
+.card .price{font-size:15px}
+.card .rev{font-size:12px;color:var(--graphite)}
+.card .add{background:none;border:1px solid var(--rule);border-radius:2px;padding:5px 10px;font-size:12.5px}
+.card .add:hover{border-color:var(--ink)}
+#empty{font-family:var(--serif);font-size:19px;font-weight:300;color:var(--graphite);max-width:44ch;line-height:1.5}
+
+/* cart + checkout ------------------------------------------------------- */
+.panel{border-top:1px solid var(--rule);padding-top:14px}
+#cart-lines{list-style:none;margin:0 0 12px;padding:0;font-size:13px}
+#cart-lines li{display:grid;grid-template-columns:1fr auto auto;gap:8px;padding:5px 0;align-items:baseline}
+.cl-x{background:none;border:none;color:var(--graphite);font-size:12px;text-decoration:underline;padding:0}
+.carttotal{display:flex;justify-content:space-between;font-size:14px;margin-bottom:12px}
+#checkout{display:flex;flex-direction:column;gap:8px}
+#checkout input{padding:9px 10px;border:1px solid var(--rule);background:var(--paper);border-radius:2px;font:inherit;font-size:14px}
+#checkout button{padding:11px;border:1px solid var(--ink);background:var(--ink);color:var(--chalk);border-radius:2px}
+#placed{font-size:13px;color:var(--oxblood);margin:8px 0 0}
+
+/* scripted agent -------------------------------------------------------- */
+#agent{border-top:1px solid var(--rule);padding-top:14px}
+#agent-lines{list-style:none;margin:0;padding:0;font-size:13px;max-height:260px;overflow:auto}
+#agent-lines li{padding:6px 0;border-top:1px solid var(--rule);display:grid;grid-template-columns:64px 1fr;gap:8px}
+#agent-lines li:first-child{border-top:none}
+.who{color:var(--graphite);font-size:12px}
+.line.store .said{font-family:var(--serif);font-size:15px}
+#run-agent{background:none;border:1px solid var(--rule);border-radius:2px;padding:7px 12px;font-size:13px;margin-bottom:10px}
+
+footer{border-top:1px solid var(--rule);padding:20px 0 40px;font-size:13px;color:var(--graphite)}
+footer p{margin:0 0 6px;max-width:76ch}
+
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap headrow">
+    <span class="mark">Counterask</span>
+    <span class="tagline">the store that asks back</span>
+    <span id="badge" class="badge">checking…</span>
+  </div>
+</header>
+
+<div class="wrap searchband">
+  <form id="search" autocomplete="off">
+    <input id="q" placeholder="Say it the way you would say it — &ldquo;a leather belt, nothing with a snap, not over $50&rdquo;" aria-label="What are you after?">
+    <button type="submit">Search</button>
+    <button type="button" id="reset">Clear</button>
+  </form>
+  <div class="examples">
+    <button data-example="belt">belt</button>
+    <button data-example="leather belt">leather belt</button>
+    <button data-example="running shoes">running shoes</button>
+    <button data-example="waterproof hiking boots, no laces">waterproof hiking boots, no laces</button>
+    <button data-example="a wallet that is not leather, under $30">a wallet that is not leather, under $30</button>
+    <button data-example="cheapest wool sweater">cheapest wool sweater</button>
+    <button data-example="I'm looking for a leather belt, nothing with a snap, not over $50">a leather belt, nothing with a snap, not over $50</button>
+    <button data-example="hiking boots, any material is fine">hiking boots, any material is fine</button>
+    <button data-example="a jacket, not from Ridgeline, between 80 and 150 dollars">a jacket, not from Ridgeline, between 80 and 150 dollars</button>
+    <button data-example="actually, ignore my earlier preference. what I need is a nylon belt">actually, ignore my earlier preference &mdash; a nylon belt</button>
+    <button data-example="waterproof insulated silk gloves under $15">waterproof insulated silk gloves under $15</button>
+  </div>
+  <div id="understood" hidden></div>
+</div>
+
+<div class="wrap cols">
+  <div class="rail">
+    <section id="question" hidden></section>
+
+    <section>
+      <h2>Why</h2>
+      <ul id="why" hidden></ul>
+    </section>
+
+    <section>
+      <h2>Tools on offer right now</h2>
+      <ul id="tools"></ul>
+      <p id="tool-note"></p>
+    </section>
+
+    <section>
+      <h2>Tool calls</h2>
+      <ul id="log"></ul>
+    </section>
+
+    <section class="panel">
+      <h2>Cart</h2>
+      <ul id="cart-lines"></ul>
+      <div class="carttotal">
+        <span><span id="cart-count">0</span> in cart</span>
+        <span id="cart-total">$0.00</span>
+      </div>
+      <!-- Declarative: an agent can fill this in, the browser focuses the
+           button, and only the person presses it. No toolautosubmit. -->
+      <form id="checkout" toolname="checkout" tooldescription="Fill in the order. The shopper presses the button.">
+        <input name="name" placeholder="Name" aria-label="Name">
+        <input name="email" type="email" placeholder="Email" aria-label="Email">
+        <input name="address" placeholder="Address" aria-label="Address">
+        <input id="checkout-total" name="total" readonly aria-label="Order total">
+        <button type="submit">Place order</button>
+      </form>
+      <p id="placed" hidden></p>
+    </section>
+
+    <section id="agent-wrap" class="panel">
+      <h2>Watch an agent drive it</h2>
+      <button id="run-agent">Run the scripted agent</button>
+      <div id="agent" hidden><ul id="agent-lines"></ul></div>
+    </section>
+  </div>
+
+  <main>
+    <div class="gridhead">
+      <span id="count"></span>
+      <span id="preview" hidden></span>
+    </div>
+    <p id="empty">Ask for something. When the store has enough to go on it answers; when
+      answering would be a guess it asks you one question back, and tells you what that
+      question would clear.</p>
+    <div id="grid"></div>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <p><span id="catalog-size">—</span> synthetic menswear products, generated deterministically so
+      every run is the same. No server, no model call, no tokens: the whole store is this page.</p>
+    <p>Attributes are multi-valued and unevenly recorded on purpose — a shoe is both athletic and
+      casual, and only a twentieth of the catalog records a fit. Both facts are what the stopping
+      policy has to survive.</p>
+  </div>
+</footer>
+
+<script src="catalog.js"></script>
+<script src="engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
