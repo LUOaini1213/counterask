@@ -128,10 +128,14 @@ running in the tab — no server, no model call, no tokens:
   `AbortSignal` it was registered with. The page listens to `toolchange` and
   calls `getTools()` to show the live list, so a person can watch it come and
   go.
-- `refine_search` (require or exclude), `list_attributes` (vocabulary with
-  counts, `readOnlyHint`), `show_products` (agent-curated grid),
-  `explain_ranking` (`readOnlyHint`), `add_to_cart`, `remove_from_cart`,
-  `view_cart`, `reset_search`. Every tool carries a `title`.
+- `refine_search` (require or exclude), `revise_search` (the shopper changed
+  their mind: take back a value, a facet, the budget — the cart stays),
+  `parse_only` (a dry run of the reading with a per-pass audit,
+  `readOnlyHint`), `list_attributes` (vocabulary with counts, `readOnlyHint`),
+  `show_products` (agent-curated grid), `explain_ranking` (`readOnlyHint`),
+  `add_to_cart`, `remove_from_cart`, `view_cart`, `reset_search`. Every tool
+  carries a `title`. The visit — search, open question, cart — is remembered
+  across reloads.
 - `checkout` — a **declarative** `<form toolname="checkout">` with
   `toolparamdescription` on its fields and *without* `toolautosubmit`: an agent
   can fill in the name and address, the browser focuses the button, and only
