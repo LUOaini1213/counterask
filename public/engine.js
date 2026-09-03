@@ -441,14 +441,18 @@ export class Catalog {
       // nearly all of them, which is exactly what the question-picker wants.
       // Injecting it as an ordinary facet rather than special-casing it means
       // filtering, gain, phrasing and the simulated shopper all work unchanged.
-      const leaf = (it.c ?? []).filter(Boolean).slice(-1)[0];
-      if (leaf) (it.f ??= {}).kind = [leaf.toLowerCase()];
+      // The whole path is recorded, shallow to deep — accessories / wallets,
+      // card cases & money organizers / wallets — so the tree can be asked
+      // about one level at a time (see splitKind) and a chosen node keeps
+      // everything beneath it.
+      const path = (it.c ?? []).filter(Boolean).map((x) => x.toLowerCase());
+      if (path.length) (it.f ??= {}).kind = path;
     }
     this.N = this.items.length;
     this.avgLen = this.items.reduce((a, it) => a + it.terms.size, 0) / Math.max(this.N, 1);
     if (!this.meta.facets.includes('kind')) this.meta.facets = ['kind', ...this.meta.facets];
     this.facetValues = {
-      kind: [...new Set(this.items.map((it) => it.f.kind?.[0]).filter(Boolean))].sort(),
+      kind: [...new Set(this.items.flatMap((it) => it.f.kind ?? []))].sort(),
       ...this.facetValues,
     };
 
@@ -721,6 +725,7 @@ function order(sort, budget) {
 // such assumption, and says something a shopper can read: answering this cuts
 // the pool by about this much.
 export function splitValue(pool, facet) {
+  if (facet === 'kind') return splitKind(pool);
   const counts = new Map();
   let covered = 0;
   for (const it of pool) {
@@ -743,6 +748,92 @@ export function splitValue(pool, facet) {
 
   const reduction = 1 - expectedSurvivors / covered;
   return { gain: Math.max(0, coverage * reduction), coverage, counts };
+}
+
+// The category tree, asked one level at a time.
+//
+// Measured against the leaf-only question it replaces (800 targets, oracle
+// and menu-only shoppers): keyword Hit@1 +0.005, Hit@10 -0.001, agent
+// sentences flat. A wash on the benchmarks; kept for the questions it
+// produces and because a parent node ("shoes") now works as a filter.
+// Scoring every other facet the same capped way was byte-identical on all
+// four runs - their tails are too small to matter - so only this one does.
+//
+// A product's category is a path, and the whole path is recorded on it, so
+// the pool can be split at any depth. Whatever nearly every candidate shares
+// is an ancestor, not a question; below that, the shallowest level that
+// actually splits the pool is the one to ask, because "shoes or oxfords?" is
+// not a question anyone can answer. Once a node is chosen the filter keeps
+// only products beneath it, the next level becomes the shallowest split, and
+// the same code asks again. Products whose path stops above the level being
+// asked cannot answer it; they count against coverage, the same way an
+// unrecorded attribute does. Idea borrowed from the cuizi-rewrite branch.
+function splitKind(pool) {
+  const N = pool.length;
+  const none = { gain: 0, coverage: 0, counts: new Map(), level: null, ancestor: null };
+  if (!N) return none;
+
+  // The deepest node nearly everyone shares, for phrasing the question.
+  const share = new Map();
+  const depthOf = new Map();
+  let covered = 0;
+  let maxDepth = 0;
+  for (const it of pool) {
+    const path = it.f.kind;
+    if (!path?.length) continue;
+    covered++;
+    maxDepth = Math.max(maxDepth, path.length);
+    path.forEach((v, i) => {
+      share.set(v, (share.get(v) || 0) + 1);
+      if (!depthOf.has(v) || i < depthOf.get(v)) depthOf.set(v, i);
+    });
+  }
+  let ancestor = null;
+  for (const [v, c] of share) {
+    if (c >= 0.95 * covered && (ancestor === null || depthOf.get(v) > depthOf.get(ancestor))) ancestor = v;
+  }
+
+  // Level by level, shallowest first. A level where one node dominates
+  // splits nothing worth a turn — a pool of belts is 95% "accessories" — so
+  // the first level whose split clears enough is the one to ask; below the
+  // bar, the best level is still reported so the policy can decline it.
+  // Level by level. A question shows four options and "something else", so
+  // a level is scored as it will be asked: the four biggest nodes and one
+  // "other" bucket. A leaf level with forty small leaves scores badly — most
+  // shoppers would answer "other" — and a level where one node dominates
+  // scores badly too. The level that clears the most candidates wins; ties
+  // go to the shallower one.
+  // The candidate levels are each fixed depth, plus "leaf": every product's
+  // own last node whatever its depth, which is what the catalogue's leaves
+  // were before the tree existed and what a mixed-depth pool can always
+  // answer. Products whose path stops above a fixed depth cannot answer at
+  // that depth; they count against its coverage.
+  let best = null;
+  for (const d of [...Array(maxDepth).keys(), 'leaf']) {
+    const counts = new Map();
+    let atLevel = 0;
+    for (const it of pool) {
+      const path = it.f.kind;
+      const v = d === 'leaf' ? path?.[path.length - 1] : path?.[d];
+      if (v === undefined) continue;
+      atLevel++;
+      counts.set(v, (counts.get(v) || 0) + 1);
+    }
+    if (counts.size < 2) continue;
+    const coverage = atLevel / N;
+    const sorted = [...counts.values()].sort((a, b) => b - a);
+    const shown = sorted.slice(0, 4);
+    const other = sorted.slice(4).reduce((a, b) => a + b, 0);
+    let expectedSurvivors = 0;
+    for (const c of [...shown, other]) expectedSurvivors += (c / atLevel) * c;
+    const reduction = 1 - expectedSurvivors / atLevel;
+    const result = { gain: Math.max(0, coverage * reduction), coverage, counts, level: d, ancestor };
+    const ok = coverage >= POLICY.minCoverage;
+    if (!best || (ok && !best.ok) || (ok === best.ok && result.gain > best.gain)) best = { ...result, ok };
+  }
+  if (!best) return { ...none, coverage: covered / N, ancestor };
+  delete best.ok;
+  return best;
 }
 
 // How far clear of the pack the leader is.
@@ -834,8 +925,10 @@ export function decide(catalog, scored, constraints, asksSoFar = 0, { declined =
     // Known already, or declined already. "No preference" used to be
     // forgotten the moment it was clicked, and the same question came
     // straight back: 12 re-asks in 800 simulated sessions.
-    if (constraints[facet] || declined.includes(facet)) continue;
-    const { gain, coverage, counts } = splitValue(pool, facet);
+    if (declined.includes(facet)) continue;
+    // A chosen category can be asked about again, one level deeper.
+    if (constraints[facet] && facet !== 'kind') continue;
+    const { gain, coverage, counts, level = null, ancestor = null } = splitValue(pool, facet);
     if (coverage < POLICY.minCoverage) {
       // Too thinly recorded to ask about — but say so when it would
       // otherwise have looked like the strongest question, so the reader
@@ -845,7 +938,7 @@ export function decide(catalog, scored, constraints, asksSoFar = 0, { declined =
     }
     // Rank candidate questions by candidates removed, not by share removed.
     const removed = gain * pool.length;
-    if (!best || removed > best.removed) best = { facet, gain, coverage, counts, removed };
+    if (!best || removed > best.removed) best = { facet, gain, coverage, counts, removed, level, ancestor };
   }
 
   if (!best || best.removed < POLICY.minRemoved || best.gain < POLICY.minGain) {
@@ -900,7 +993,9 @@ export function decide(catalog, scored, constraints, asksSoFar = 0, { declined =
     gain: best.gain,
     separation: sep,
     reasons,
-    question: phrase(best.facet, options),
+    level: best.level ?? null,
+    ancestor: best.ancestor ?? null,
+    question: phrase(best.facet, options, best),
   };
 }
 
@@ -913,7 +1008,9 @@ export function decide(catalog, scored, constraints, asksSoFar = 0, { declined =
 export function differentiate(catalog, shown, constraints = {}, declined = []) {
   const out = [];
   for (const facet of catalog.meta.facets) {
-    if (constraints[facet] || declined.includes(facet)) continue;
+    if (declined.includes(facet)) continue;
+    // A chosen category can be asked about again, one level deeper.
+    if (constraints[facet] && facet !== 'kind') continue;
     const { gain, coverage, counts } = splitValue(shown, facet);
     if (coverage < POLICY.minCoverage || counts.size < 2) continue;
     const splits = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)
@@ -924,8 +1021,9 @@ export function differentiate(catalog, shown, constraints = {}, declined = []) {
     .map(({ facet, splits }) => ({ facet, splits }));
 }
 
-function phrase(facet, options) {
+function phrase(facet, options, ask = {}) {
   const list = options.map((o) => o.label ?? o.value).slice(0, 4).join(', ');
+  const head = (v) => (v.length <= 22 ? v : (v.split(/[,&]/)[0].trim() || v));
   const q = {
     material: `What material are you after — ${list}?`,
     closure: `How should it fasten — ${list}?`,
@@ -937,7 +1035,11 @@ function phrase(facet, options) {
     occasion: `What is the occasion — ${list}?`,
     pocket: `Do you need ${list}?`,
     waterproof: `Should it be ${list}?`,
-    kind: `Which category — ${list}?`,
+    kind: (() => {
+      const h = ask.ancestor ? head(ask.ancestor) : null;
+      const clashes = h && options.some((o) => (o.label ?? o.value) === h);
+      return h && !clashes ? `Which kind of ${h} — ${list}?` : `Which category — ${list}?`;
+    })(),
   }[facet];
   return q || `Which ${facet} — ${list}?`;
 }

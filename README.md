@@ -245,6 +245,17 @@ on the shopper while interrogating them about a 23-item sweater. A "the leader
 is clear enough, stop asking" rule was built twice and removed twice — the
 second time it measurably lost more than it saved.
 
+*The category tree is asked one level at a time, scored as it will be shown.*
+Every product carries its whole category path. A question shows four
+options and "something else", so each level of the tree, and each
+product's own leaf, is scored as the four biggest nodes plus an "other"
+bucket; the level that clears the most candidates is asked, phrased under
+the deepest node the pool shares — *Which kind of clothing — pullovers,
+vests, cardigans, sweaters?* Measured against the leaf-only question it
+replaced: keyword Hit@1 +0.005, Hit@10 −0.001, agent sentences flat — a
+wash, kept for the questions it produces and because an agent can now
+filter by a parent node ("shoes") as well as a leaf.
+
 What the built-in examples do:
 
 | Query | Read as | Candidates | Decision |
@@ -254,7 +265,7 @@ What the built-in examples do:
 | `running shoes` | occasion = athletic | 496 | **ask** — what kind? |
 | `waterproof hiking boots, no laces` | water resistant, outdoor; **not** lace-up, "lace" banned | 56 | **ask** — what kind? |
 | `a wallet that is not leather, under $30` | **not** leather; ≤ $30 | 30 | **ask** — what kind? |
-| `cheapest wool sweater` | wool; cheapest first | 23 | **ask** — what kind? |
+| `cheapest wool sweater` | wool; cheapest first | 23 | **ask** — which kind of clothing? |
 | `…leather belt, nothing with a snap, not over $50` | leather; **not** snap; ≤ $50 | 58 | answer — differ by closure: 11 buckle, 1 pull-on |
 
 `leather belt` is the one to look at. 64 candidates is a lot, and the store
@@ -367,8 +378,9 @@ frozen catalog has no click log.
 
 Teammate Cui Zixuan (`cuizhi-chat`) built an independent implementation of
 the same design on the [`cuizi-rewrite`](../../tree/cuizi-rewrite) branch —
-its own parser, policy, tests and a self-contained single-file build. Four of
-its ideas were folded back into this tree: the `parse_only` dry run with a
+its own parser, policy, tests and a self-contained single-file build. Five of
+its ideas were folded back into this tree: the category tree asked one level
+at a time, the `parse_only` dry run with a
 per-pass audit of the reading, `revise_search` for a shopper who changes
 their mind, remembering the visit across reloads, and a fuzzer. The branch is
 kept as it was.

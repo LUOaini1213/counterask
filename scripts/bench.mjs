@@ -47,9 +47,19 @@ export function queryFor(item, rng, catalog = cat) {
 }
 
 // A shopper who knows what they want: answer from the target, or decline.
-export function answerAs(target, facet) {
+export function answerAs(target, facet, ask = null) {
   const have = target.f[facet];
-  return have?.length ? have[0] : null;
+  if (!have?.length) return null;
+  // A category question is asked one level at a time: answer with the
+  // target's node at that level, or "no preference" when its path is shorter.
+  const value = facet === 'kind' && ask?.level != null
+    ? (ask.level === 'leaf' ? have[have.length - 1] : (have[ask.level] ?? null))
+    : have[0];
+  // SHOPPER=menu: a person who can only pick from the four options on screen,
+  // and says "no preference" when theirs is not among them. The default is
+  // an oracle who can name any value the catalogue knows, as an agent can.
+  if (process.env.SHOPPER === 'menu' && value != null && ask?.options && !ask.options.some((o) => o.value === value)) return null;
+  return value;
 }
 
 // `patience` is the chance a shopper bothers to answer a question at all.
@@ -79,7 +89,7 @@ export function bench({ n = 400, seed = 2026, maxAsks = 3, patience = 1 } = {}) 
     for (;;) {
       const d = decide(cat, scored, constraints, asks, { declined });
       if (d.action !== 'ask' || asks >= maxAsks) break;
-      const value = rng() < patience ? answerAs(target, d.facet) : null;
+      const value = rng() < patience ? answerAs(target, d.facet, d) : null;
       asks++;
       if (value === null) {
         // "No preference" — the store must not filter on it, and must not

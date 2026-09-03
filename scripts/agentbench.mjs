@@ -220,7 +220,7 @@ export function agentBench({ n = 800, seed = 2026, maxAsks = 3, holdout = false 
       if (d.action !== 'ask' || asks >= maxAsks) break;
       if (truth.stated[d.facet] !== undefined || truth.waved === d.facet) s.redundantAsks++;
       if (declined.includes(d.facet)) s.reasks++;
-      const value = answerAs(target, d.facet);
+      const value = answerAs(target, d.facet, d);
       asks++;
       if (value === null) { declined.push(d.facet); continue; }
       constraints = { ...constraints, [d.facet]: [value] };
