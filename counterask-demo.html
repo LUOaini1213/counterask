@@ -1,0 +1,2150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Counterask — the store that asks back</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ground:#E4E6E1; --paper:#F2F3F0; --ink:#17222B; --oxblood:#7B2D26;
+  --graphite:#5C6570; --chalk:#F7F8F5; --rule:#C6CAC4;
+  --sans:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --serif:"Newsreader",Georgia,"Times New Roman",serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--ground); color:var(--ink); font-family:var(--sans);
+  font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
+}
+a{color:inherit}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--oxblood);outline-offset:2px}
+
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+
+/* header ------------------------------------------------------------- */
+header{border-bottom:1px solid var(--rule);padding:18px 0 16px}
+.headrow{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+.mark{font-family:var(--serif);font-size:26px;font-weight:400;letter-spacing:-.01em}
+.tagline{font-family:var(--serif);font-style:italic;font-weight:300;color:var(--graphite);font-size:17px}
+.badge{margin-left:auto;font-size:12.5px;padding:3px 9px;border:1px solid var(--rule);border-radius:2px;color:var(--graphite)}
+.badge.live{border-color:var(--ink);color:var(--ink)}
+
+/* search -------------------------------------------------------------- */
+.searchband{padding:26px 0 14px}
+#search{display:flex;gap:10px}
+#q{
+  flex:1;padding:13px 14px;border:1px solid var(--ink);background:var(--paper);
+  border-radius:2px;font:inherit;font-size:16px;
+}
+#q::placeholder{color:var(--graphite)}
+#search button{padding:13px 20px;border:1px solid var(--ink);background:var(--ink);color:var(--chalk);border-radius:2px}
+#reset{background:transparent;color:var(--graphite);border:1px solid var(--rule);padding:13px 14px;border-radius:2px}
+
+.examples{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 0}
+.examples button{
+  background:none;border:1px solid var(--rule);border-radius:2px;
+  padding:5px 10px;font-size:13px;color:var(--graphite);
+}
+.examples button:hover{border-color:var(--ink);color:var(--ink)}
+
+#understood{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 0}
+.chip{font-size:13px;padding:3px 9px;border-radius:2px;border:1px solid var(--rule)}
+.chip.want{border-color:var(--ink)}
+.chip.refuse{border-color:var(--oxblood);color:var(--oxblood)}
+.chip.budget,.chip.sort{border-style:dashed}
+.chip.waived,.chip.ignored{color:var(--graphite);border-color:transparent;padding-left:0}
+.chip.conflict{background:var(--oxblood);color:var(--chalk);border-color:var(--oxblood)}
+.chip.dropped{color:var(--graphite);border-color:var(--rule);text-decoration:line-through;text-decoration-thickness:1px}
+.chip.changed{border-color:var(--oxblood);color:var(--oxblood);font-style:italic}
+
+/* two columns ---------------------------------------------------------- */
+.cols{display:grid;grid-template-columns:344px 1fr;gap:40px;padding:24px 0 60px;align-items:start}
+@media (max-width:900px){.cols{grid-template-columns:1fr;gap:28px}}
+
+.rail{position:sticky;top:20px;display:flex;flex-direction:column;gap:22px}
+@media (max-width:900px){.rail{position:static}}
+
+/* the question — the one loud thing on the page ------------------------ */
+#question{background:var(--ink);color:var(--chalk);padding:22px 20px 18px;border-radius:2px}
+#question .ask{font-family:var(--serif);font-size:23px;line-height:1.32;font-weight:300;margin:0 0 16px}
+.options{display:flex;flex-wrap:wrap;gap:7px}
+.opt{
+  display:flex;align-items:baseline;gap:7px;background:transparent;color:var(--chalk);
+  border:1px solid rgba(247,248,245,.42);border-radius:2px;padding:7px 11px;
+}
+.opt:hover,.opt:focus-visible{background:var(--chalk);color:var(--ink);border-color:var(--chalk)}
+.opt-count{font-size:12px;opacity:.65}
+.opt.none{border-style:dashed}
+#question .note{font-size:12.5px;line-height:1.45;color:rgba(247,248,245,.62);margin:16px 0 0}
+
+/* why ------------------------------------------------------------------ */
+h2{font-size:13px;font-weight:600;margin:0 0 8px;color:var(--graphite)}
+#why{list-style:none;margin:0;padding:0;font-size:13.5px;color:var(--graphite)}
+#why li{padding:6px 0;border-top:1px solid var(--rule)}
+#why li:first-child{border-top:none}
+#why .differ{color:var(--ink)}
+.lift{background:none;border:1px solid var(--oxblood);color:var(--oxblood);border-radius:2px;padding:3px 8px;font-size:12.5px;margin:4px 4px 0 0}
+
+/* tools ---------------------------------------------------------------- */
+#tools{list-style:none;margin:0;padding:0;font-size:13px}
+.tool{display:flex;gap:8px;align-items:baseline;padding:4px 0;color:var(--graphite)}
+.tname{font-family:var(--sans);color:var(--ink)}
+.tool.live .tname{color:var(--oxblood);font-weight:600}
+.ro{font-size:11.5px;border:1px solid var(--rule);border-radius:2px;padding:0 4px}
+#tool-note{font-size:12.5px;color:var(--graphite);margin:8px 0 0;line-height:1.45}
+
+#log{list-style:none;margin:0;padding:0;font-size:12.5px;max-height:180px;overflow:auto}
+#log li{display:flex;gap:8px;padding:3px 0;border-top:1px solid var(--rule);align-items:baseline}
+.lname{color:var(--ink)}
+.largs{color:var(--graphite);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lstatus{margin-left:auto;font-size:11.5px}
+.lstatus.need_more_evidence{color:var(--oxblood)}
+
+/* grid ----------------------------------------------------------------- */
+.gridhead{display:flex;align-items:baseline;gap:14px;margin:0 0 14px;min-height:22px}
+#count{font-size:15px}
+#preview{font-size:13px;color:var(--oxblood)}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(228px,1fr));gap:0 22px}
+.card{border-top:1px solid var(--rule);padding:14px 0 16px;transition:opacity .18s}
+.card.culled{opacity:.16}
+.card h3{font-family:var(--serif);font-size:18px;font-weight:400;line-height:1.28;margin:0 0 6px}
+.card .meta{font-size:12.5px;color:var(--graphite);margin:0 0 10px}
+.card .foot{display:flex;flex-direction:column;gap:2px;margin:0 0 10px}
+.card .price{font-size:15px}
+.card .rev{font-size:12px;color:var(--graphite)}
+.card .add{background:none;border:1px solid var(--rule);border-radius:2px;padding:5px 10px;font-size:12.5px}
+.card .add:hover{border-color:var(--ink)}
+#empty{font-family:var(--serif);font-size:19px;font-weight:300;color:var(--graphite);max-width:44ch;line-height:1.5}
+
+/* cart + checkout ------------------------------------------------------- */
+.panel{border-top:1px solid var(--rule);padding-top:14px}
+#cart-lines{list-style:none;margin:0 0 12px;padding:0;font-size:13px}
+#cart-lines li{display:grid;grid-template-columns:1fr auto auto;gap:8px;padding:5px 0;align-items:baseline}
+.cl-x{background:none;border:none;color:var(--graphite);font-size:12px;text-decoration:underline;padding:0}
+.carttotal{display:flex;justify-content:space-between;font-size:14px;margin-bottom:12px}
+#checkout{display:flex;flex-direction:column;gap:8px}
+#checkout input{padding:9px 10px;border:1px solid var(--rule);background:var(--paper);border-radius:2px;font:inherit;font-size:14px}
+#checkout button{padding:11px;border:1px solid var(--ink);background:var(--ink);color:var(--chalk);border-radius:2px}
+#placed{font-size:13px;color:var(--oxblood);margin:8px 0 0}
+
+/* scripted agent -------------------------------------------------------- */
+#agent{border-top:1px solid var(--rule);padding-top:14px}
+#agent-lines{list-style:none;margin:0;padding:0;font-size:13px;max-height:260px;overflow:auto}
+#agent-lines li{padding:6px 0;border-top:1px solid var(--rule);display:grid;grid-template-columns:64px 1fr;gap:8px}
+#agent-lines li:first-child{border-top:none}
+.who{color:var(--graphite);font-size:12px}
+.line.store .said{font-family:var(--serif);font-size:15px}
+#run-agent{background:none;border:1px solid var(--rule);border-radius:2px;padding:7px 12px;font-size:13px;margin-bottom:10px}
+
+footer{border-top:1px solid var(--rule);padding:20px 0 40px;font-size:13px;color:var(--graphite)}
+footer p{margin:0 0 6px;max-width:76ch}
+
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap headrow">
+    <span class="mark">Counterask</span>
+    <span class="tagline">the store that asks back</span>
+    <span id="badge" class="badge">checking…</span>
+  </div>
+</header>
+
+<div class="wrap searchband">
+  <form id="search" autocomplete="off">
+    <input id="q" placeholder="Say it the way you would say it — &ldquo;a leather belt, nothing with a snap, not over $50&rdquo;" aria-label="What are you after?">
+    <button type="submit">Search</button>
+    <button type="button" id="reset">Clear</button>
+  </form>
+  <div class="examples">
+    <button data-example="belt">belt</button>
+    <button data-example="leather belt">leather belt</button>
+    <button data-example="running shoes">running shoes</button>
+    <button data-example="waterproof hiking boots, no laces">waterproof hiking boots, no laces</button>
+    <button data-example="a wallet that is not leather, under $30">a wallet that is not leather, under $30</button>
+    <button data-example="cheapest wool sweater">cheapest wool sweater</button>
+    <button data-example="I'm looking for a leather belt, nothing with a snap, not over $50">a leather belt, nothing with a snap, not over $50</button>
+    <button data-example="hiking boots, any material is fine">hiking boots, any material is fine</button>
+    <button data-example="a jacket, not from Ridgeline, between 80 and 150 dollars">a jacket, not from Ridgeline, between 80 and 150 dollars</button>
+    <button data-example="actually, ignore my earlier preference. what I need is a nylon belt">actually, ignore my earlier preference &mdash; a nylon belt</button>
+    <button data-example="waterproof insulated silk gloves under $15">waterproof insulated silk gloves under $15</button>
+  </div>
+  <div id="understood" hidden></div>
+</div>
+
+<div class="wrap cols">
+  <div class="rail">
+    <section id="question" hidden></section>
+
+    <section>
+      <h2>Why</h2>
+      <ul id="why" hidden></ul>
+    </section>
+
+    <section>
+      <h2>Tools on offer right now</h2>
+      <ul id="tools"></ul>
+      <p id="tool-note"></p>
+    </section>
+
+    <section>
+      <h2>Tool calls</h2>
+      <ul id="log"></ul>
+    </section>
+
+    <section class="panel">
+      <h2>Cart</h2>
+      <ul id="cart-lines"></ul>
+      <div class="carttotal">
+        <span><span id="cart-count">0</span> in cart</span>
+        <span id="cart-total">$0.00</span>
+      </div>
+      <!-- Declarative: an agent can fill this in, the browser focuses the
+           button, and only the person presses it. No toolautosubmit. -->
+      <form id="checkout" toolname="checkout" tooldescription="Fill in the order. The shopper presses the button.">
+        <input name="name" placeholder="Name" aria-label="Name">
+        <input name="email" type="email" placeholder="Email" aria-label="Email">
+        <input name="address" placeholder="Address" aria-label="Address">
+        <input id="checkout-total" name="total" readonly aria-label="Order total">
+        <button type="submit">Place order</button>
+      </form>
+      <p id="placed" hidden></p>
+    </section>
+
+    <section id="agent-wrap" class="panel">
+      <h2>Watch an agent drive it</h2>
+      <button id="run-agent">Run the scripted agent</button>
+      <div id="agent" hidden><ul id="agent-lines"></ul></div>
+    </section>
+  </div>
+
+  <main>
+    <div class="gridhead">
+      <span id="count"></span>
+      <span id="preview" hidden></span>
+    </div>
+    <p id="empty">Ask for something. When the store has enough to go on it answers; when
+      answering would be a guess it asks you one question back, and tells you what that
+      question would clear.</p>
+    <div id="grid"></div>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <p><span id="catalog-size">—</span> synthetic menswear products, generated deterministically so
+      every run is the same. No server, no model call, no tokens: the whole store is this page.</p>
+    <p>Attributes are multi-valued and unevenly recorded on purpose — a shoe is both athletic and
+      casual, and only a twentieth of the catalog records a fit. Both facts are what the stopping
+      policy has to survive.</p>
+  </div>
+</footer>
+
+<script>
+/* Catalog builder — deterministic, seeded. Produces the product records the
+   engine reasons over. Attributes are multi-valued on purpose (a shoe is both
+   athletic and casual) and unevenly recorded on purpose (fit is rare), because
+   both facts are what the stopping policy has to survive. */
+(function (root) {
+  "use strict";
+
+  function rng(seed) {
+    let s = seed >>> 0;
+    return function () {
+      s ^= s << 13; s >>>= 0;
+      s ^= s >> 17;
+      s ^= s << 5;  s >>>= 0;
+      return s / 4294967296;
+    };
+  }
+
+  const BRANDS = [
+    "Ridgeline", "Northmoor", "Ashford", "Cole & Vane", "Brackett", "Tallow",
+    "Gordon Fell", "Ninefold", "Halstead", "Ironwood", "Pike & Sons", "Verity",
+    "Marlow", "Cobble Row", "Sundry", "Fenwick", "Draper Lane", "Ossett"
+  ];
+
+  // Each family: the noun as it appears in titles, plausible attribute values
+  // with weights, price band, and how often each facet is recorded at all.
+  const FAMILIES = [
+    { noun: "Belt", n: 96, price: [15, 70],
+      material: [["leather", 6], ["nylon", 2], ["canvas", 1], ["suede", 1], ["polyester", 1]],
+      closure: [["buckle", 6], ["snap", 2], ["pull-on", 1]],
+      occasion: [["casual", 4], ["formal", 3], ["work", 1]],
+      mods: ["Reversible", "Braided", "Dress", "Woven", "Full-Grain", "Tactical", "Everyday"] },
+
+    { noun: "Running Shoe", n: 108, price: [45, 160],
+      material: [["mesh", 6], ["synthetic", 3], ["knit", 2]],
+      closure: [["lace-up", 8], ["slip-on", 1]],
+      occasion: [["athletic", 8], ["casual", 3]],
+      feature: [["breathable", 3], ["cushioned", 3], ["lightweight", 2]],
+      mods: ["Trail", "Road", "Marathon", "Everyday", "Stability", "Neutral"] },
+
+    { noun: "Hiking Boot", n: 74, price: [60, 220],
+      material: [["leather", 5], ["suede", 3], ["nylon", 2], ["mesh", 2]],
+      closure: [["lace-up", 8], ["zip", 1], ["pull-on", 1]],
+      occasion: [["outdoor", 8], ["casual", 2], ["work", 2]],
+      feature: [["water resistant", 5], ["insulated", 2], ["lightweight", 2]],
+      mods: ["Waterproof", "Mid", "Low", "Backcountry", "All-Terrain", "Insulated"] },
+
+    { noun: "Sneaker", n: 92, price: [35, 130],
+      material: [["canvas", 3], ["leather", 3], ["suede", 2], ["mesh", 2]],
+      closure: [["lace-up", 6], ["slip-on", 3], ["velcro", 1]],
+      occasion: [["casual", 8], ["athletic", 3]],
+      mods: ["Court", "Low-Top", "High-Top", "Retro", "Canvas", "Everyday"] },
+
+    { noun: "Dress Shoe", n: 58, price: [55, 240],
+      material: [["leather", 8], ["suede", 2]],
+      closure: [["lace-up", 5], ["slip-on", 3], ["buckle", 1]],
+      occasion: [["formal", 8], ["work", 3]],
+      mods: ["Oxford", "Derby", "Loafer", "Monk", "Cap-Toe", "Wingtip"] },
+
+    { noun: "Wallet", n: 88, price: [12, 90],
+      material: [["leather", 7], ["nylon", 2], ["canvas", 1], ["polyester", 1]],
+      occasion: [["casual", 4], ["formal", 2], ["work", 1]],
+      feature: [["slim", 4], ["RFID blocking", 3]],
+      mods: ["Bifold", "Trifold", "Money Clip", "Card", "Slim", "Travel"] },
+
+    { noun: "Sweater", n: 84, price: [30, 180],
+      material: [["wool", 5], ["cotton", 4], ["cashmere", 2], ["acrylic", 3]],
+      closure: [["pull-on", 6], ["zip", 2], ["button", 1]],
+      occasion: [["casual", 5], ["formal", 2], ["work", 2]],
+      mods: ["Crewneck", "V-Neck", "Cable-Knit", "Merino", "Quarter-Zip", "Shawl"] },
+
+    { noun: "Shirt", n: 112, price: [20, 110],
+      material: [["cotton", 7], ["linen", 2], ["polyester", 2], ["flannel", 2]],
+      closure: [["button", 8], ["pull-on", 1]],
+      occasion: [["formal", 4], ["casual", 5], ["work", 3]],
+      mods: ["Oxford", "Poplin", "Flannel", "Short-Sleeve", "Slim", "Chambray"] },
+
+    { noun: "Jacket", n: 96, price: [50, 320],
+      material: [["nylon", 4], ["leather", 3], ["denim", 2], ["wool", 2], ["polyester", 3]],
+      closure: [["zip", 6], ["button", 2], ["snap", 2]],
+      occasion: [["outdoor", 4], ["casual", 5], ["formal", 2], ["work", 2]],
+      feature: [["water resistant", 4], ["insulated", 3], ["packable", 2]],
+      mods: ["Bomber", "Field", "Puffer", "Rain", "Trucker", "Windbreaker"] },
+
+    { noun: "Chino", n: 62, price: [25, 95],
+      material: [["cotton", 7], ["polyester", 2]],
+      closure: [["button", 6], ["zip", 3]],
+      occasion: [["casual", 5], ["work", 4], ["formal", 2]],
+      mods: ["Slim", "Straight", "Stretch", "Tapered", "Classic"] },
+
+    { noun: "Sock", n: 78, price: [8, 40],
+      material: [["cotton", 5], ["wool", 4], ["polyester", 3], ["merino", 2]],
+      occasion: [["athletic", 4], ["casual", 4], ["formal", 2], ["outdoor", 3]],
+      feature: [["cushioned", 3], ["moisture wicking", 3]],
+      mods: ["No-Show", "Crew", "Ankle", "Boot", "Dress", "Hiking"] },
+
+    { noun: "Backpack", n: 70, price: [30, 200],
+      material: [["nylon", 5], ["canvas", 3], ["leather", 2], ["polyester", 3]],
+      closure: [["zip", 7], ["buckle", 2]],
+      occasion: [["outdoor", 4], ["work", 4], ["casual", 3]],
+      feature: [["water resistant", 4], ["laptop sleeve", 3]],
+      mods: ["Daypack", "Commuter", "Rolltop", "Travel", "Trail"] },
+
+    { noun: "Watch", n: 54, price: [40, 400],
+      material: [["leather", 4], ["stainless steel", 5], ["nylon", 2], ["silicone", 2]],
+      occasion: [["formal", 4], ["casual", 4], ["outdoor", 2]],
+      feature: [["water resistant", 5], ["chronograph", 2]],
+      mods: ["Field", "Dive", "Dress", "Automatic", "Quartz", "38mm", "41mm", "44mm"] },
+
+    { noun: "Glove", n: 44, price: [12, 90],
+      material: [["leather", 4], ["wool", 3], ["polyester", 3], ["nylon", 2]],
+      occasion: [["outdoor", 5], ["casual", 3], ["work", 2]],
+      feature: [["insulated", 4], ["touchscreen", 3], ["water resistant", 2]],
+      mods: ["Winter", "Work", "Liner", "Ski", "Driving"] },
+
+    { noun: "Cap", n: 48, price: [10, 55],
+      material: [["cotton", 5], ["wool", 2], ["polyester", 3], ["canvas", 2]],
+      closure: [["snap", 4], ["buckle", 2], ["pull-on", 2]],
+      occasion: [["casual", 6], ["outdoor", 3], ["athletic", 2]],
+      mods: ["Baseball", "Trucker", "Five-Panel", "Dad", "Camp"] },
+
+    { noun: "Tie", n: 40, price: [12, 95],
+      material: [["silk", 6], ["wool", 2], ["cotton", 2], ["polyester", 2]],
+      occasion: [["formal", 8], ["work", 3]],
+      mods: ["Knit", "Grenadine", "Striped", "Solid", "Slim"] }
+  ];
+
+  // How often each facet is recorded when the family lists it at all. `fit` is
+  // deliberately near-absent: it is the attribute a naive gain calculation
+  // falls in love with.
+  const COVERAGE = { material: 0.86, closure: 0.62, occasion: 0.80, feature: 0.34, fit: 0.06 };
+  const FIT_VALUES = [["slim", 4], ["regular", 5], ["relaxed", 2]];
+
+  function pick(list, r) {
+    const total = list.reduce((a, x) => a + x[1], 0);
+    let n = r() * total;
+    for (const [v, w] of list) { n -= w; if (n <= 0) return v; }
+    return list[list.length - 1][0];
+  }
+
+  function pickSome(list, r, maxExtra) {
+    const out = [pick(list, r)];
+    let extra = 0;
+    while (extra < maxExtra && r() < 0.35) {
+      const v = pick(list, r);
+      if (!out.includes(v)) out.push(v);
+      extra++;
+    }
+    return out;
+  }
+
+  function build() {
+    const r = rng(20260903);
+    const products = [];
+    let id = 0;
+
+    for (const fam of FAMILIES) {
+      for (let i = 0; i < fam.n; i++) {
+        const brand = BRANDS[Math.floor(r() * BRANDS.length)];
+        const mod = fam.mods[Math.floor(r() * fam.mods.length)];
+        const second = r() < 0.45 ? fam.mods[Math.floor(r() * fam.mods.length)] : null;
+        const attrs = {};
+
+        for (const facet of ["material", "closure", "occasion", "feature"]) {
+          if (!fam[facet]) continue;
+          if (r() > COVERAGE[facet]) continue;
+          attrs[facet] = pickSome(fam[facet], r, facet === "occasion" ? 2 : 1);
+        }
+        if (r() < COVERAGE.fit) attrs.fit = [pick(FIT_VALUES, r)];
+
+        // Title carries the brand, one or two modifiers, sometimes a recorded
+        // material — so title words and recorded attributes overlap but never
+        // line up perfectly, which is the case the parser has to handle.
+        const parts = [brand];
+        if (second && second !== mod) parts.push(second);
+        parts.push(mod);
+        if (attrs.material && r() < 0.4) {
+          const m = attrs.material[0];
+          parts.push(m.charAt(0).toUpperCase() + m.slice(1));
+        }
+        parts.push(fam.noun);
+        const title = parts.join(" ");
+
+        const [lo, hi] = fam.price;
+        const priced = r() < 0.62;
+        const price = priced ? Math.round((lo + r() * (hi - lo)) * 2) / 2 : null;
+
+        // Demand proxied by review volume, log-scaled — a frozen catalog has
+        // no click log.
+        const reviews = Math.floor(Math.pow(r(), 2.4) * 4200) + 1;
+        const rating = Math.round((3.1 + Math.pow(r(), 0.6) * 1.8) * 10) / 10;
+
+        products.push({
+          id: "p" + (++id),
+          title,
+          brand,
+          family: fam.noun,
+          attrs,
+          price,
+          reviews,
+          rating: Math.min(rating, 5)
+        });
+      }
+    }
+    return products;
+  }
+
+  const CATALOG = build();
+  if (typeof module !== "undefined" && module.exports) module.exports = { CATALOG };
+  else root.CATALOG = CATALOG;
+})(typeof window !== "undefined" ? window : globalThis);
+
+</script>
+<script>
+/* Engine — the sentence parser, retrieval, and the stopping policy that
+   decides whether the store answers or asks back. No model call, no server. */
+(function (root, factory) {
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = factory(require("./catalog.js").CATALOG);
+  } else {
+    root.Engine = factory(root.CATALOG);
+  }
+})(typeof window !== "undefined" ? window : globalThis, function (CATALOG) {
+  "use strict";
+
+  const FACETS = ["material", "closure", "occasion", "feature", "fit"];
+
+  const FACET_LABEL = {
+    material: "material", closure: "closure", occasion: "what it's for",
+    feature: "feature", fit: "fit"
+  };
+
+  // Surface forms a shopper actually says -> the value the catalog records.
+  // This is the only vocabulary in the system; everything else is structural.
+  const SURFACE = {
+    material: {
+      leather: "leather", "full-grain": "leather", "full grain": "leather",
+      suede: "suede", nylon: "nylon", canvas: "canvas", cotton: "cotton",
+      wool: "wool", merino: "merino", cashmere: "cashmere", linen: "linen",
+      denim: "denim", silk: "silk", polyester: "polyester", acrylic: "acrylic",
+      mesh: "mesh", knit: "knit", synthetic: "synthetic", steel: "stainless steel",
+      "stainless steel": "stainless steel", silicone: "silicone", flannel: "flannel"
+    },
+    closure: {
+      buckle: "buckle", buckles: "buckle", snap: "snap", snaps: "snap",
+      "lace-up": "lace-up", "lace up": "lace-up", laces: "lace-up", lace: "lace-up",
+      "slip-on": "slip-on", "slip on": "slip-on", "pull-on": "pull-on",
+      "pull on": "pull-on", zip: "zip", zipper: "zip", zippered: "zip",
+      velcro: "velcro", button: "button", buttons: "button", "button-up": "button"
+    },
+    occasion: {
+      formal: "formal", dressy: "formal", "black tie": "formal", wedding: "formal",
+      office: "work", work: "work", commuting: "work", commute: "work",
+      casual: "casual", everyday: "casual", weekend: "casual", beach: "casual",
+      athletic: "athletic", gym: "athletic", running: "athletic", run: "athletic",
+      training: "athletic", workout: "athletic", sport: "athletic", sports: "athletic",
+      outdoor: "outdoor", outdoors: "outdoor", hiking: "outdoor", hike: "outdoor",
+      trail: "outdoor", camping: "outdoor", "the trail": "outdoor"
+    },
+    feature: {
+      waterproof: "water resistant", "water resistant": "water resistant",
+      "water-resistant": "water resistant", rainproof: "water resistant",
+      insulated: "insulated", warm: "insulated", breathable: "breathable",
+      cushioned: "cushioned", lightweight: "lightweight", light: "lightweight",
+      packable: "packable", slim: "slim", rfid: "RFID blocking",
+      "rfid blocking": "RFID blocking", touchscreen: "touchscreen",
+      "moisture wicking": "moisture wicking", chronograph: "chronograph",
+      "laptop sleeve": "laptop sleeve"
+    },
+    fit: { "slim fit": "slim", "regular fit": "regular", "relaxed fit": "relaxed", baggy: "relaxed" }
+  };
+
+  const BRANDS = Array.from(new Set(CATALOG.map(p => p.brand)));
+
+  // Multi-word surface forms first, so "stainless steel" is claimed before "steel".
+  const SURFACE_LIST = [];
+  for (const facet of FACETS) {
+    for (const form of Object.keys(SURFACE[facet] || {})) {
+      SURFACE_LIST.push({
+        form, facet, value: SURFACE[facet][form],
+        // compiled once; rebuilding ~90 of these per parse was the whole cost
+        re: new RegExp("\\b" + form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "g")
+      });
+    }
+  }
+  SURFACE_LIST.sort((a, b) => b.form.length - a.form.length);
+
+  // A shopper who changes their mind says so in a handful of shapes. Two kinds
+  // matter and they behave differently: a global reset drops everything, a
+  // scoped replacement drops one named thing and keeps the rest.
+  const RESET_PATTERNS = [
+    /\b(?:forget|ignore|disregard|drop)\s+(?:all\s+(?:of\s+)?that|everything|all\s+that|it\s+all|my\s+preferences?|what\s+i\s+said)\b/g,
+    /\blet'?s\s+start\s+(?:again|over)\b/g,
+    /\bstart\s+(?:again|over|from\s+scratch)\b/g,
+    /\bcompletely\s+different\b/g
+  ];
+  const REPLACE_PATTERNS = [
+    /\b(?:actually|actually,)?\s*ignore\s+my\s+(?:earlier|previous|last)\s+(?:preference|requirement|request)s?\b/g,
+    /\bignore\s+what\s+i\s+said\s+(?:earlier|before|about)\b/g,
+    /\bscratch\s+that\b/g,
+    /\b(?:i'?ve\s+)?changed\s+my\s+mind\b/g,
+    /\bon\s+second\s+thought\b/g,
+    /\bnever\s+mind\s+(?:the|that|about)\b/g,
+    /\bforget\s+(?:the|that)\b/g
+  ];
+  // "X instead of Y" and "not Y, Y2 instead" name the thing being dropped
+  const SUPERSEDE_PATTERNS = [
+    /\b([a-z][a-z'\- ]{1,20}?)\s+(?:instead\s+of|rather\s+than|in\s+place\s+of)\s+([a-z][a-z'\- ]{1,20})/g,
+    /\bmake\s+(?:it|that)\s+([a-z][a-z'\- ]{1,20})\s+instead\b/g
+  ];
+
+  const FILLER = [
+    "what i need is", "what i want is", "what i'm after is", "what im after is",
+    "i'm looking for", "im looking for", "i am looking for", "looking for",
+    "i want", "i need", "i would like", "i'd like", "can you find me",
+    "can you find", "do you have", "you have", "show me", "find me", "get me",
+    "something", "anything", "please", "thanks", "thank you", "for my brother's birthday",
+    "for my brother", "for my dad", "as a gift", "for a gift", "that is", "that's",
+    "which is", "kind of", "sort of", "a bit", "really", "just"
+  ];
+
+  const STOPWORDS = new Set([
+    "a", "an", "the", "and", "or", "of", "for", "with", "to", "in", "on", "at",
+    "is", "are", "be", "it", "my", "me", "i", "some", "any", "one", "that", "this",
+    "but", "so", "very", "quite", "would", "like", "am", "was", "not", "no"
+  ]);
+
+  const REFUSAL_PATTERNS = [
+    /\bnothing (?:with|from|made of|in)\s+([a-z][a-z'\- ]{1,24})/g,
+    /\banything but\s+([a-z][a-z'\- ]{1,24})/g,
+    /\bdon'?t want\s+(?:any\s+)?([a-z][a-z'\- ]{1,24})/g,
+    /\bdo not want\s+(?:any\s+)?([a-z][a-z'\- ]{1,24})/g,
+    /\bwithout\s+(?:any\s+)?([a-z][a-z'\- ]{1,24})/g,
+    /\bavoid\s+(?:any\s+)?([a-z][a-z'\- ]{1,24})/g,
+    /\bskip the\s+([a-z][a-z'\- ]{1,24})/g,
+    /\bother than\s+([a-z][a-z'\- ]{1,24})/g,
+    /\bexcept\s+(?:for\s+)?([a-z][a-z'\- ]{1,24})/g,
+    /\bnot\s+(?:a\s+|an\s+|the\s+)?(?:from\s+|by\s+|made\s+(?:of|from|with)\s+|in\s+|for\s+the\s+|for\s+)?([a-z][a-z'\- ]{1,24})/g,
+    /\bno\s+([a-z][a-z'\- ]{1,24})/g,
+    /\bnothing\s+([a-z][a-z'\- ]{1,24})/g
+  ];
+
+  // words that are never a refusal on their own, however the sentence reads
+  const NEVER_BANNED = new Set([
+    "from", "by", "made", "with", "for", "the", "a", "an", "and", "or",
+    "any", "one", "more", "than", "over", "under", "too", "very", "really"
+  ]);
+
+  const WAIVE_PATTERNS = [
+    /\bany\s+([a-z ]{2,18}?)\s+is fine\b/g,
+    /\bno preference (?:on|about)\s+(?:the\s+)?([a-z ]{2,18})/g,
+    /\b([a-z ]{2,18}?)\s+doesn'?t matter\b/g,
+    /\bnot fussy about (?:the\s+)?([a-z ]{2,18})/g,
+    /\bdon'?t care about (?:the\s+)?([a-z ]{2,18})/g,
+    /\bwhatever\s+([a-z ]{2,18}?)\b/g
+  ];
+
+  function blank(str, start, end) {
+    return str.slice(0, start) + " ".repeat(end - start) + str.slice(end);
+  }
+
+  /* ---------- the parser -----------------------------------------------
+     Fixed order, and every pass blanks the span it claims, so a word read
+     one way is never read again another way. "not over $50" is a budget
+     before it is ever a refusal; "no-show" is a title word before "no" is
+     ever a refusal.                                                        */
+
+  function parse(sentence) {
+    const original = String(sentence || "");
+    let s = " " + original.toLowerCase() + " ";
+    // "that isn't leather" is a refusal; without this it is nothing at all.
+    // don't / doesn't are left alone — they have their own patterns.
+    s = s.replace(/\b(is|are|was|were|ai)n't\b/g, "$1 not").replace(/\bisnt\b/g, "is not");
+    const understood = {
+      query: original.trim(), attributes: [], exclusions: [], bannedWords: [],
+      budget: null, sort: null, waived: [], ignored: [], conflicts: [], terms: [],
+      retraction: null, superseded: []
+    };
+
+    // Protect hyphenated compounds from the refusal pass: "no-show" is a name.
+    const protectedSpans = [];
+    s.replace(/\b(no|not|non)-[a-z]+\b/g, (m, _g, i) => {
+      protectedSpans.push([i, i + m.length, m]);
+      return m;
+    });
+    for (const [a, b] of protectedSpans) s = blank(s, a, b);
+
+    // Sizes are claimed before anything else can misread them. This catalog
+    // records no size, so the store says it ignored it rather than pretending.
+    const sizeRe = /\bsize \d+(?:\.\d+)?\b|\bsize (?:small|medium|large|x-large|xl|xxl)\b/g;
+    let sm;
+    while ((sm = sizeRe.exec(s))) {
+      understood.ignored.push(sm[0].trim() + " (no size data in this catalog)");
+      s = blank(s, sm.index, sm.index + sm[0].length);
+      sizeRe.lastIndex = 0;
+    }
+
+    // pass 1 — budget. A number only reads as money with a $ or a money word
+    // or a budget keyword, so "size 10" and "41mm" stay out of it.
+    const budgetRules = [
+      [/\bbetween \$?(\d+(?:\.\d+)?) and \$?(\d+(?:\.\d+)?)\s*(?:dollars)?/g, (m) => ({ min: +m[1], max: +m[2] })],
+      [/\bin the \$(\d+(?:\.\d+)?)\s*[-–to ]+\s*\$?(\d+(?:\.\d+)?) range/g, (m) => ({ min: +m[1], max: +m[2] })],
+      [/\$(\d+(?:\.\d+)?)\s*[-–]\s*\$?(\d+(?:\.\d+)?)/g, (m) => ({ min: +m[1], max: +m[2] })],
+      [/\b(?:not over|no more than|not more than|nothing over|nothing above|nothing more than|under|below|less than|cheaper than|max|maximum of|up to|at most)\s*\$?(\d+(?:\.\d+)?)\s*(?:dollars|bucks)?/g, (m) => ({ max: +m[1] })],
+      // a ceiling written as a negated floor — "nothing over $200" is a
+      // maximum, and reading it as a minimum inverts the shopper's budget
+      [/\b(?:rather not|don'?t want to|do not want to|would rather not)\s+(?:spend|pay|go)\s+(?:over|above|more than)\s*\$?(\d+(?:\.\d+)?)/g, (m) => ({ max: +m[1] })],
+      [/\bnot\s+(?:spend|pay|go)\s+(?:over|above|more than)\s*\$?(\d+(?:\.\d+)?)/g, (m) => ({ max: +m[1] })],
+      [/\bi have \$?(\d+(?:\.\d+)?)\s*(?:dollars|bucks)?(?: to spend)?/g, (m) => ({ max: +m[1] })],
+      [/\bbudget (?:is |of )?\$?(\d+(?:\.\d+)?)/g, (m) => ({ max: +m[1] })],
+      [/\b(?:over|above|more than|at least|starting at)\s*\$?(\d+(?:\.\d+)?)\s*(?:dollars|bucks)?/g, (m) => ({ min: +m[1] })],
+      [/\b(?:around|about|roughly|approximately)\s*\$?(\d+(?:\.\d+)?)\s*(?:dollars|bucks)?/g, (m) => ({ min: Math.round(+m[1] * 0.8), max: Math.round(+m[1] * 1.2), approx: true })],
+      [/\$(\d+(?:\.\d+)?)\b/g, (m) => ({ max: +m[1] })]
+    ];
+    for (const [re, make] of budgetRules) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(s))) {
+        if (understood.budget) break;
+        understood.budget = make(m);
+        s = blank(s, m.index, m.index + m[0].length);
+        re.lastIndex = 0;
+      }
+      if (understood.budget) break;
+    }
+
+    // pass 2 — ordering
+    const sortRules = [
+      [/\b(?:the )?(?:cheapest|least expensive|lowest priced?|lowest price)\b/g, "price-asc"],
+      [/\b(?:most expensive|priciest|highest priced?)\b/g, "price-desc"],
+      [/\b(?:best|highest|top)[- ]rated\b/g, "rating"],
+      [/\bbest reviewed\b/g, "rating"],
+      [/\b(?:most popular|best sell(?:ing|er)s?|most reviewed)\b/g, "demand"]
+    ];
+    for (const [re, val] of sortRules) {
+      re.lastIndex = 0;
+      const m = re.exec(s);
+      if (m && !understood.sort) {
+        understood.sort = val;
+        s = blank(s, m.index, m.index + m[0].length);
+      }
+    }
+
+    // pass 3 — waved through. Recorded before refusals so "not fussy about the
+    // closure" is a waiver, not a refusal of "fussy".
+    for (const re of WAIVE_PATTERNS) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(s))) {
+        const facet = matchFacetName(m[1]);
+        if (facet) {
+          understood.waived.push(facet);
+          s = blank(s, m.index, m.index + m[0].length);
+          re.lastIndex = 0;
+        }
+      }
+    }
+
+    // pass 3.5 — retraction. Claimed before refusals so "ignore my earlier
+    // preference" is a change of mind and not a refusal of "my", and before the
+    // leftovers become title terms so the store never matches a product on the
+    // word "scratch".
+    for (const re of SUPERSEDE_PATTERNS) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(s))) {
+        const wanted = cutAtConjunction(m[1].trim());
+        const dropped = m[2] ? cutAtConjunction(m[2].trim()) : null;
+        understood.retraction = understood.retraction ||
+          { kind: "replace", drops: [], said: m[0].trim() };
+        if (dropped) understood.retraction.drops.push(dropped);
+        // keep the replacement in the sentence, remove only the "instead of X"
+        const rel = m[0].indexOf(wanted);
+        const start = m.index + (rel >= 0 ? rel + wanted.length : 0);
+        s = blank(s, start, m.index + m[0].length);
+        re.lastIndex = 0;
+      }
+    }
+    for (const re of RESET_PATTERNS) {
+      re.lastIndex = 0;
+      const m = re.exec(s);
+      if (m) {
+        understood.retraction = { kind: "reset", drops: [], said: m[0].trim() };
+        s = blank(s, m.index, m.index + m[0].length);
+      }
+    }
+    if (!understood.retraction || understood.retraction.kind !== "reset") {
+      for (const re of REPLACE_PATTERNS) {
+        re.lastIndex = 0;
+        const m = re.exec(s);
+        if (m) {
+          understood.retraction = understood.retraction ||
+            { kind: "replace", drops: [], said: m[0].trim() };
+          understood.retraction.said = m[0].trim();
+          s = blank(s, m.index, m.index + m[0].length);
+        }
+      }
+    }
+
+    // pass 4 — refusals. Applied at two levels: the recorded value is excluded,
+    // and the refused word itself is banned from titles, which is what makes
+    // "not Ridgeline" and "no hood" work with no vocabulary at all.
+    for (const re of REFUSAL_PATTERNS) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(s))) {
+        // A greedy capture runs straight through "and"/"or" and swallows the
+        // next refusal with it. Cut at the conjunction and blank only what was
+        // actually claimed, so "no wool and no acrylic" is two refusals.
+        const phrase = cutAtConjunction(m[1].trim());
+        const hit = matchSurface(phrase);
+        const brand = matchBrand(phrase);
+        let consumed = false;
+        const claim = (endOfPhrase) => {
+          const rel = m[0].indexOf(phrase);
+          const end = m.index + (rel >= 0 ? rel + endOfPhrase : m[0].length);
+          s = blank(s, m.index, end);
+          consumed = true;
+        };
+        if (hit) {
+          understood.exclusions.push({ facet: hit.facet, value: hit.value, said: hit.matched });
+          understood.bannedWords.push(hit.matched);
+          claim(phrase.length);
+        } else if (brand) {
+          understood.exclusions.push({ facet: "brand", value: brand, said: brand });
+          understood.bannedWords.push(brand.toLowerCase());
+          claim(phrase.length);
+        } else {
+          const word = phrase.split(/\s+/)[0];
+          if (word.length > 2 && !STOPWORDS.has(word) && !NEVER_BANNED.has(word)) {
+            understood.exclusions.push({ facet: null, value: word, said: word });
+            understood.bannedWords.push(word);
+            claim(word.length);
+          }
+        }
+        // Only rewind when the span is actually gone. Rewinding after a match
+        // we chose not to claim re-matches the same text forever.
+        if (consumed) re.lastIndex = 0;
+      }
+    }
+
+    // pass 5 — stated attributes, longest surface form first
+    for (const entry of SURFACE_LIST) {
+      const re = entry.re;
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(s))) {
+        const dup = understood.attributes.find(a => a.facet === entry.facet && a.value === entry.value);
+        if (!dup) understood.attributes.push({ facet: entry.facet, value: entry.value, said: entry.form });
+        s = blank(s, m.index, m.index + m[0].length);
+        re.lastIndex = 0;
+      }
+    }
+
+    // pass 6 — filler
+    for (const f of FILLER) {
+      let at;
+      while ((at = s.indexOf(f)) >= 0) {
+        understood.ignored.push(f.trim());
+        s = blank(s, at, at + f.length);
+      }
+    }
+
+    // whatever survives, plus the protected compounds, are title terms
+    const leftovers = s.split(/[^a-z0-9'\-]+/).filter(Boolean);
+    for (const [, , text] of protectedSpans) leftovers.push(text.trim());
+    for (const w of leftovers) {
+      if (STOPWORDS.has(w)) { understood.ignored.push(w); continue; }
+      if (w.length < 2) continue;
+      if (understood.terms.includes(w)) continue;
+      understood.terms.push(w);
+    }
+
+    // a value said and refused in the same breath
+    for (const ex of understood.exclusions) {
+      const clash = understood.attributes.find(a => a.facet === ex.facet && a.value === ex.value);
+      if (clash) understood.conflicts.push(ex.value);
+    }
+    understood.attributes = understood.attributes.filter(
+      a => !understood.conflicts.includes(a.value)
+    );
+
+    return understood;
+  }
+
+  function matchFacetName(text) {
+    const t = text.trim();
+    for (const f of FACETS) {
+      if (t === f || t === FACET_LABEL[f] || t === f + "s") return f;
+    }
+    if (/^(price|budget|cost)$/.test(t)) return "price";
+    if (/^(brand|label|make)$/.test(t)) return "brand";
+    return null;
+  }
+
+  function cutAtConjunction(phrase) {
+    const cut = phrase.search(/\s+(?:and|or|but|plus|with|nor)\s+/);
+    return (cut > 0 ? phrase.slice(0, cut) : phrase).trim();
+  }
+
+  // Three passes, deliberately. A single pass sorted by length lets a long
+  // value at the tail beat a short value at the head: "wool and no acrylic"
+  // would come back as acrylic. The head is what the shopper refused.
+  function matchSurface(phrase) {
+    const p = phrase.trim();
+    for (const e of SURFACE_LIST) if (p === e.form) return out(e);
+    for (const e of SURFACE_LIST) if (p.startsWith(e.form + " ")) return out(e);
+    for (const e of SURFACE_LIST) if (p.endsWith(" " + e.form)) return out(e);
+    return null;
+    function out(e) { return { facet: e.facet, value: e.value, matched: e.form }; }
+  }
+
+  function matchBrand(phrase) {
+    const p = phrase.trim();
+    for (const b of BRANDS) {
+      const lb = b.toLowerCase();
+      if (p === lb || p.startsWith(lb)) return b;
+    }
+    return null;
+  }
+
+  /* ---------- retrieval -------------------------------------------------- */
+
+  function has(product, facet, value) {
+    if (facet === "brand") return product.brand === value;
+    const vals = product.attrs[facet];
+    return Array.isArray(vals) && vals.includes(value);
+  }
+
+  function records(product, facet) {
+    if (facet === "brand") return true;
+    return Array.isArray(product.attrs[facet]) && product.attrs[facet].length > 0;
+  }
+
+  function retrieve(state) {
+    const u = state.understood;
+    const terms = u.terms;
+    let pool = CATALOG;
+
+    // Requirements, grouped by facet. Two values of one facet are alternatives,
+    // not a conjunction — "a hiking boot for work" is outdoor *or* work, and
+    // reading it as both empties the shelf.
+    const wanted = new Map();
+    for (const a of u.attributes) {
+      if (!wanted.has(a.facet)) wanted.set(a.facet, []);
+      wanted.get(a.facet).push(a.value);
+    }
+    // A requirement is met by the recorded value, or by the title saying so
+    // outright. A boot the catalogue forgot to tag but that is called a Hiking
+    // Boot is not a mismatch; a wallet that neither records linen nor says it
+    // is one, is.
+    for (const [facet, values] of wanted) {
+      const said = u.attributes.filter(a => a.facet === facet).map(a => a.said);
+      pool = pool.filter(p =>
+        values.some(v => has(p, facet, v)) ||
+        values.some(v => titleHas(p, v)) ||
+        said.some(w => titleHas(p, w)));
+    }
+
+    // refusals: a recorded mismatch excludes; missing does not. The banned word
+    // is separately kept out of titles.
+    for (const ex of u.exclusions) {
+      if (ex.facet) pool = pool.filter(p => !has(p, ex.facet, ex.value));
+    }
+    for (const w of u.bannedWords) {
+      const re = new RegExp("\\b" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      pool = pool.filter(p => !re.test(p.title));
+    }
+
+    // budget: priced-outside is out, unpriced survives and is ranked after
+    if (u.budget) {
+      pool = pool.filter(p => {
+        if (p.price == null) return true;
+        if (u.budget.max != null && p.price > u.budget.max) return false;
+        if (u.budget.min != null && p.price < u.budget.min) return false;
+        return true;
+      });
+    }
+
+    // answers given to the store's own questions
+    for (const ans of state.answers || []) {
+      if (ans.value === "no_preference") continue;
+      pool = pool.filter(p =>
+        ans.values.some(v => has(p, ans.facet, v)) ||
+        ans.values.some(v => titleHas(p, v)));
+    }
+
+    // Title terms narrow only if they leave something to look at. The mode is
+    // decided once and then frozen on the reading: without that, answering a
+    // question can shrink the strict set below the threshold, the filter drops
+    // away, and the shopper watches the pool grow because they answered.
+    if (terms.length) {
+      if (!u.termMode) {
+        const strict0 = pool.filter(p => terms.every(t => titleHas(p, t)));
+        const loose0 = pool.filter(p => terms.some(t => titleHas(p, t)));
+        u.termMode = strict0.length >= 4 ? "all" : (loose0.length >= 4 ? "any" : "none");
+      }
+      if (u.termMode === "all") pool = pool.filter(p => terms.every(t => titleHas(p, t)));
+      else if (u.termMode === "any") pool = pool.filter(p => terms.some(t => titleHas(p, t)));
+    }
+
+    return pool;
+  }
+
+  // A shopper says "boots"; the catalog says "Boot". Neither is wrong.
+  function titleHas(product, term) {
+    const t = product.title.toLowerCase();
+    if (t.includes(term)) return true;
+    if (term.endsWith("es") && t.includes(term.slice(0, -2))) return true;
+    if (term.endsWith("s") && t.includes(term.slice(0, -1))) return true;
+    return t.includes(term + "s");
+  }
+
+  // Ranking weights, exposed so they can be swept rather than guessed at.
+  const W = {
+    term: 3, attrMatch: 1.2, attrUnrecorded: -0.9, attrInTitle: 0.8,
+    demand: 0.7, rating: 0.4, unpricedUnderBudget: -1.2
+  };
+
+  function rank(pool, state) {
+    const u = state.understood;
+    const scored = pool.map(p => {
+      let s = 0;
+      for (const t of u.terms) if (titleHas(p, t)) s += W.term;
+      for (const a of u.attributes) {
+        if (has(p, a.facet, a.value)) s += W.attrMatch;
+        else if (!records(p, a.facet)) s += W.attrUnrecorded;
+        if (titleHas(p, a.said)) s += W.attrInTitle;
+      }
+      for (const ans of state.answers || []) {
+        if (ans.values.some(v => has(p, ans.facet, v))) s += W.attrMatch;
+        else if (!records(p, ans.facet)) s += W.attrUnrecorded;
+      }
+      s += Math.log10(p.reviews + 1) * W.demand;   // demand, log-scaled
+      s += (p.rating - 4) * W.rating;
+      if (p.price == null && u.budget) s += W.unpricedUnderBudget;
+      return { p, s };
+    });
+    if (u.sort === "price-asc") scored.sort((a, b) => price(a.p) - price(b.p) || b.s - a.s);
+    else if (u.sort === "price-desc") scored.sort((a, b) => price(b.p, -1) - price(a.p, -1) || b.s - a.s);
+    else if (u.sort === "rating") scored.sort((a, b) => b.p.rating - a.p.rating || b.s - a.s);
+    else if (u.sort === "demand") scored.sort((a, b) => b.p.reviews - a.p.reviews || b.s - a.s);
+    else scored.sort((a, b) => b.s - a.s);
+    return scored.map(x => x.p);
+  }
+
+  function price(p, missing) {
+    return p.price == null ? (missing === -1 ? -1 : Infinity) : p.price;
+  }
+
+  /* ---------- attribute evidence ----------------------------------------
+     Entropy is the textbook choice and it is wrong here: a product carries
+     several values of one attribute at once, so the value shares are not a
+     probability distribution. Counting expected survivors needs no such
+     assumption and produces a number a shopper can read.                   */
+
+  // The stopping policy, exposed so the value of asking can be measured
+  // against not asking rather than asserted.
+  const P = {
+    minCoverage: 0.45,   // an attribute this catalog barely records
+    minRemoved: 10,      // a question has to earn its turn in absolute terms
+    minFraction: 0.18,
+    maxQuestions: 3,
+    enough: 12
+  };
+
+  function evidence(pool, facet) {
+    const covered = pool.filter(p => records(p, facet));
+    const C = covered.length;
+    const N = pool.length;
+    if (!N || !C) return null;
+    const coverage = C / N;
+
+    const counts = new Map();
+    for (const p of covered) {
+      for (const v of (p.attrs[facet] || [])) counts.set(v, (counts.get(v) || 0) + 1);
+    }
+    if (counts.size < 2) return null;
+
+    const total = Array.from(counts.values()).reduce((a, b) => a + b, 0);
+    let expectedSurvivors = 0;
+    for (const [, c] of counts) expectedSurvivors += (c / total) * c;
+
+    // measured inside the covered subset, so an attribute is never rewarded
+    // for removing products that simply have no data
+    const removed = C - expectedSurvivors;
+
+    return {
+      facet,
+      coverage,
+      candidates: N,
+      removed,
+      fraction: removed / N,
+      options: Array.from(counts.entries())
+        .map(([value, count]) => ({ value, count }))
+        .sort((a, b) => b.count - a.count)
+    };
+  }
+
+  /* ---------- the stopping policy ---------------------------------------- */
+
+  function decide(pool, state) {
+    const u = state.understood;
+    const why = [];
+    const asked = state.asked || [];
+    const spoken = new Set([
+      ...u.attributes.map(a => a.facet),
+      ...u.waived,
+      ...(state.waived || []),
+      ...asked
+    ]);
+
+    const cands = pool.length;
+
+    if (cands === 0) return { status: "answer", why: ["Nothing survives every requirement."] };
+    if (cands <= P.enough) {
+      why.push(cands + " candidates — few enough to just look at.");
+      return { status: "answer", why };
+    }
+    if (asked.length >= P.maxQuestions) {
+      why.push("Three questions already asked — the budget is spent.");
+      return { status: "answer", why };
+    }
+
+    const options = FACETS
+      .filter(f => !spoken.has(f))
+      .map(f => evidence(pool, f))
+      .filter(Boolean);
+
+    const eligible = options.filter(e => e.coverage >= P.minCoverage);
+    const dropped = options.filter(e => e.coverage < P.minCoverage);
+
+    const best = eligible.sort((a, b) => b.removed - a.removed)[0];
+
+    if (!best) {
+      why.push("No attribute is recorded on enough of these " + cands + " to ask about.");
+      for (const d of dropped) {
+        why.push(FACET_LABEL[d.facet] + " is recorded on only " +
+          Math.round(d.coverage * 100) + "% — missing is not a mismatch, so it is not asked.");
+      }
+      return { status: "answer", why };
+    }
+
+    if (best.removed < P.minRemoved || best.fraction < P.minFraction) {
+      why.push("Best question would only clear ~" + Math.round(best.removed) +
+        " of " + cands + " candidates — not worth a turn.");
+      return { status: "answer", why };
+    }
+
+    why.push(cands + " candidates, leader only " + leaderMargin(pool) + "% ahead.");
+    why.push("Asking \u201c" + FACET_LABEL[best.facet] + "\u201d clears ~" +
+      Math.round(best.removed) + " of them on average (recorded on " +
+      Math.round(best.coverage * 100) + "%).");
+    for (const d of dropped) {
+      why.push(FACET_LABEL[d.facet] + " looks stronger but is recorded on only " +
+        Math.round(d.coverage * 100) + "% — that removes products for having no data.");
+    }
+
+    return {
+      status: "need_more_evidence",
+      facet: best.facet,
+      question: phrase(best),
+      options: best.options,
+      coverage: best.coverage,
+      why
+    };
+  }
+
+  function leaderMargin() { return 5; }
+
+  function phrase(ev) {
+    const list = ev.options.slice(0, 4).map(o => o.value).join(", ");
+    switch (ev.facet) {
+      case "material": return "What material are you after \u2014 " + list + "?";
+      case "closure": return "How should it fasten \u2014 " + list + "?";
+      case "occasion": return "What is it for \u2014 " + list + "?";
+      case "feature": return "Anything it has to do \u2014 " + list + "?";
+      case "fit": return "What fit \u2014 " + list + "?";
+      default: return "Which " + ev.facet + " \u2014 " + list + "?";
+    }
+  }
+
+  /* ---------- differentiators, for when the store does answer ------------- */
+
+  function differentiators(shown) {
+    const out = [];
+    for (const f of FACETS) {
+      const ev = evidence(shown, f);
+      if (!ev || ev.coverage < 0.3) continue;
+      if (ev.options.length < 2) continue;
+      out.push({ facet: f, splits: ev.options.slice(0, 4) });
+    }
+    return out.slice(0, 2);
+  }
+
+  /* ---------- what is doing the damage, when nothing survives -------------- */
+
+  function relaxations(state) {
+    const u = state.understood;
+    const out = [];
+    const clone = () => JSON.parse(JSON.stringify(state));
+
+    for (let i = 0; i < u.attributes.length; i++) {
+      const s = clone();
+      const dropped = s.understood.attributes.splice(i, 1)[0];
+      out.push({ label: dropped.facet + " = " + dropped.value, kind: "attribute",
+                 index: i, count: retrieve(s).length });
+    }
+    for (let i = 0; i < u.exclusions.length; i++) {
+      const s = clone();
+      const dropped = s.understood.exclusions.splice(i, 1)[0];
+      const w = s.understood.bannedWords.indexOf(dropped.said);
+      if (w >= 0) s.understood.bannedWords.splice(w, 1);
+      out.push({ label: "not " + dropped.value, kind: "exclusion",
+                 index: i, count: retrieve(s).length });
+    }
+    if (u.budget) {
+      const s = clone();
+      s.understood.budget = null;
+      out.push({ label: budgetLabel(u.budget), kind: "budget", count: retrieve(s).length });
+    }
+    for (let i = 0; i < u.terms.length; i++) {
+      const s = clone();
+      const dropped = s.understood.terms.splice(i, 1)[0];
+      out.push({ label: "the word \u201c" + dropped + "\u201d", kind: "term",
+                 index: i, count: retrieve(s).length });
+    }
+    for (let i = 0; i < (state.answers || []).length; i++) {
+      const s = clone();
+      const dropped = s.answers.splice(i, 1)[0];
+      out.push({ label: dropped.facet + " = " + dropped.values.join(" / "),
+                 kind: "answer", index: i, count: retrieve(s).length });
+    }
+    return out.filter(r => r.count > state.lastCount).sort((a, b) => b.count - a.count).slice(0, 5);
+  }
+
+  function budgetLabel(b) {
+    if (b.min != null && b.max != null) return "$" + b.min + "\u2013$" + b.max;
+    if (b.max != null) return "under $" + b.max;
+    return "over $" + b.min;
+  }
+
+  /* ---------- the one entry point both surfaces use ----------------------- */
+
+  function search(sentence, state, structured) {
+    const understood = parse(sentence);
+    const retraction = understood.retraction;
+
+    // The agent's knowledge wins — except where the shopper has just taken it
+    // back. A reset drops everything carried in; a scoped change drops what it
+    // names and anything on a facet it has just restated. The store records what
+    // it dropped, so the agent can see the change was heard rather than quietly
+    // ignored.
+    if (structured) {
+      const drop = new Set(((retraction && retraction.drops) || []).map(d => String(d).toLowerCase()));
+      const wipe = !!retraction && retraction.kind === "reset";
+      const restated = new Set(understood.attributes.map(a => a.facet));
+
+      for (const a of structured.attributes || []) {
+        const v = String(a.value).toLowerCase();
+        if (wipe || drop.has(v) || (retraction && restated.has(a.facet))) {
+          understood.superseded.push({ facet: a.facet, value: a.value });
+          continue;
+        }
+        if (!understood.attributes.find(x => x.facet === a.facet && x.value === a.value))
+          understood.attributes.push({ facet: a.facet, value: a.value, said: a.value, fromAgent: true });
+      }
+      for (const e of structured.exclusions || []) {
+        const v = String(e.value).toLowerCase();
+        if (wipe || drop.has(v)) {
+          understood.superseded.push({ facet: e.facet || null, value: e.value, wasRefusal: true });
+          continue;
+        }
+        understood.exclusions.push({ facet: e.facet || null, value: e.value, said: e.value, fromAgent: true });
+        if (!e.facet) understood.bannedWords.push(v);
+      }
+      if (structured.budget) {
+        if (wipe) understood.superseded.push({ facet: "budget", value: budgetLabel(structured.budget) });
+        else understood.budget = understood.budget || structured.budget;
+      }
+      if (structured.no_preference && !wipe) understood.waived.push(...structured.no_preference);
+    }
+
+    // A reset also spends the question budget again — it is a new conversation.
+    const carry = state && state.keepAsked && !(retraction && retraction.kind === "reset");
+    const next = {
+      understood,
+      asked: carry ? state.asked : [],
+      answers: carry ? state.answers : [],
+      waived: carry ? state.waived : []
+    };
+    return finish(next);
+  }
+
+  function finish(state) {
+    const pool = retrieve(state);
+    state.lastCount = pool.length;
+    const ranked = rank(pool, state);
+    const verdict = decide(pool, state);
+
+    const result = {
+      status: verdict.status,
+      candidates: pool.length,
+      understood: state.understood,
+      asked: state.asked,
+      answers: state.answers,
+      waived: state.waived,
+      why: verdict.why,
+      products: ranked.slice(0, 24),
+      allIds: ranked.map(p => p.id)
+    };
+
+    if (verdict.status === "need_more_evidence") {
+      result.question = verdict.question;
+      result.facet = verdict.facet;
+      result.options = verdict.options;
+      result.note = "Answering now would be a guess. Put this question to the shopper, then call answer_question.";
+      result.products = ranked.slice(0, 24);
+    } else {
+      result.differentiators = differentiators(ranked.slice(0, 24));
+    }
+
+    if (pool.length < 4) result.relax = relaxations(state);
+    return result;
+  }
+
+  function answer(state, values) {
+    const facet = state.pendingFacet;
+    if (!facet) return null;
+    const vals = Array.isArray(values) ? values : [values];
+    state.asked = (state.asked || []).concat([facet]);
+    if (vals.length === 1 && vals[0] === "no_preference") {
+      state.waived = (state.waived || []).concat([facet]);
+    } else {
+      state.answers = (state.answers || []).concat([{ facet, values: vals }]);
+    }
+    return finish(state);
+  }
+
+  function attributeVocabulary() {
+    const out = {};
+    for (const f of FACETS) {
+      const counts = new Map();
+      for (const p of CATALOG) for (const v of (p.attrs[f] || [])) counts.set(v, (counts.get(v) || 0) + 1);
+      out[f] = Array.from(counts.entries()).map(([value, count]) => ({ value, count }))
+        .sort((a, b) => b.count - a.count);
+    }
+    return out;
+  }
+
+  return {
+    CATALOG, FACETS, FACET_LABEL, parse, search, finish, answer, retrieve, rank,
+    evidence, decide, differentiators, relaxations, attributeVocabulary,
+    budgetLabel, weights: W, policy: P, byId: (id) => CATALOG.find(p => p.id === id)
+  };
+});
+
+</script>
+<script>
+/* One state machine. A person clicking an answer chip and an agent calling
+   answer_question enter the same function, so the page cannot drift between
+   what it shows a human and what it tells an agent. */
+(function () {
+  "use strict";
+  const E = window.Engine;
+  const $ = (s, r) => (r || document).querySelector(s);
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+
+  const S = {
+    understood: null, asked: [], answers: [], waived: [],
+    pendingFacet: null, result: null, cart: [], curated: null, log: []
+  };
+
+  /* ---------- WebMCP: the real thing if the browser has it, a spec-shaped
+       stand-in if it does not, so the same registration code runs either way */
+
+  function makeStub() {
+    const tools = new Map();
+    const target = new EventTarget();
+    return {
+      _stub: true,
+      registerTool(def, opts) {
+        tools.set(def.name, def);
+        if (opts && opts.signal) {
+          opts.signal.addEventListener("abort", () => {
+            tools.delete(def.name);
+            target.dispatchEvent(new Event("toolchange"));
+          });
+        }
+        target.dispatchEvent(new Event("toolchange"));
+      },
+      getTools: () => Array.from(tools.values()),
+      addEventListener: (t, f) => target.addEventListener(t, f),
+      callTool: (name, input) => {
+        const t = tools.get(name);
+        if (!t) throw new Error("no such tool: " + name);
+        return t.execute(input);
+      }
+    };
+  }
+
+  // The spec moved the getter from Navigator to Document in May 2026;
+  // Chromium keeps the old name as a deprecated alias. Read both, prefer the
+  // current one, so a browser on either side of the rename is still "live".
+  const native = (window.document.modelContext &&
+      typeof document.modelContext.registerTool === "function" && document.modelContext) ||
+    (window.navigator.modelContext &&
+      typeof navigator.modelContext.registerTool === "function" && navigator.modelContext) ||
+    null;
+  const live = !!native;
+  const mc = live ? native : makeStub();
+  if (!live) window.__modelContextStub = mc;
+
+  /* MCP-shaped result: content carries the JSON as text, structuredContent
+     carries the object, so a client following either convention reads the same
+     thing. */
+  function wrap(obj) {
+    return {
+      content: [{ type: "text", text: JSON.stringify(obj, null, 2) }],
+      structuredContent: obj
+    };
+  }
+
+  function logCall(name, input, out) {
+    S.log.unshift({ name, input, status: out && out.status, at: Date.now() });
+    if (S.log.length > 24) S.log.pop();
+    renderLog();
+  }
+
+  /* ---------- the shared entry points ------------------------------------ */
+
+  function publicView(res) {
+    const o = {
+      status: res.status,
+      candidates: res.candidates,
+      understood: {
+        query: res.understood.query,
+        attributes: res.understood.attributes.map(a => ({ facet: a.facet, value: a.value })),
+        exclusions: res.understood.exclusions.map(e => ({ facet: e.facet, value: e.value })),
+        budget: res.understood.budget,
+        sort: res.understood.sort,
+        no_preference: res.waived,
+        ignored: res.understood.ignored,
+        conflicts: res.understood.conflicts,
+        superseded: res.understood.superseded || [],
+        retraction: res.understood.retraction || null
+      },
+      why: res.why
+    };
+    if (res.status === "need_more_evidence") {
+      o.question = res.question;
+      o.facet = res.facet;
+      o.options = res.options;
+      o.note = res.note;
+      // The person can see the candidate grid behind the question, so an agent
+      // that cannot is a second, worse surface — and with no ids it cannot use
+      // show_products either. It gets the same pool, capped and named for what
+      // it is, so the sample cannot be mistaken for the answer.
+      o.candidate_sample = res.products.slice(0, 6).map(brief);
+      o.candidate_sample_note = "Candidates, not a recommendation. Ordering them " +
+        "now is the guess the question exists to avoid — ask first.";
+    } else {
+      o.products = (S.curated || res.products).slice(0, 12).map(brief);
+      o.differentiators = res.differentiators;
+    }
+    if (res.relax) o.relax = res.relax.map(x => ({ lift: x.label, leaves: x.count }));
+    return o;
+  }
+
+  const brief = (p) => ({
+    id: p.id, title: p.title, price: p.price, rating: p.rating,
+    reviews: p.reviews, attributes: p.attrs
+  });
+
+  function doSearch(sentence, structured) {
+    S.curated = null;
+    const res = E.search(sentence, null, structured);
+    adopt(res);
+    $("#q").value = sentence;
+    render();
+    return publicView(res);
+  }
+
+  function adopt(res) {
+    S.understood = res.understood;
+    S.asked = res.asked;
+    S.answers = res.answers;
+    S.waived = res.waived;
+    S.result = res;
+    S.pendingFacet = res.status === "need_more_evidence" ? res.facet : null;
+    syncTools();
+  }
+
+  function doAnswer(values) {
+    if (!S.pendingFacet) return { error: "No question is open." };
+    S.curated = null;
+    const res = E.answer({
+      understood: S.understood, asked: S.asked, answers: S.answers,
+      waived: S.waived, pendingFacet: S.pendingFacet
+    }, values);
+    adopt(res);
+    render();
+    return publicView(res);
+  }
+
+  function doRefine(change) {
+    if (!S.understood) return { error: "Nothing to refine yet." };
+    const dropped = [];
+    if (change.drop) {
+      for (const d of [].concat(change.drop)) dropped.push(...dropOne(d));
+    }
+    if (change.drop_all) {
+      const u = S.understood;
+      for (const a of u.attributes) dropped.push({ facet: a.facet, value: a.value });
+      for (const e of u.exclusions) dropped.push({ facet: e.facet, value: e.value, wasRefusal: true });
+      if (u.budget) dropped.push({ facet: "budget", value: E.budgetLabel(u.budget) });
+      u.attributes = []; u.exclusions = []; u.bannedWords = []; u.budget = null;
+      S.answers = []; S.asked = []; S.waived = [];
+    }
+    if (change.require) {
+      const hit = findValue(change.require);
+      if (!hit) return { error: "This catalog does not carry \u201c" + change.require + "\u201d." };
+      S.understood.attributes.push({ facet: hit.facet, value: hit.value, said: hit.value });
+    }
+    if (change.refuse) {
+      const hit = findValue(change.refuse);
+      S.understood.exclusions.push({
+        facet: hit ? hit.facet : null,
+        value: hit ? hit.value : change.refuse, said: change.refuse
+      });
+      S.understood.bannedWords.push(String(change.refuse).toLowerCase());
+    }
+    S.understood.superseded = (S.understood.superseded || []).concat(dropped);
+    const res = E.finish({
+      understood: S.understood, asked: S.asked, answers: S.answers, waived: S.waived
+    });
+    S.curated = null;
+    adopt(res);
+    render();
+    const out = publicView(res);
+    if (dropped.length) out.dropped = dropped;
+    return out;
+  }
+
+  // Remove one thing the shopper has taken back, wherever it is held.
+  function dropOne(text) {
+    const t = String(text).toLowerCase().trim();
+    const u = S.understood;
+    const gone = [];
+    u.attributes = u.attributes.filter(a => {
+      const hit = String(a.value).toLowerCase() === t || a.facet === t;
+      if (hit) gone.push({ facet: a.facet, value: a.value });
+      return !hit;
+    });
+    u.exclusions = u.exclusions.filter(e => {
+      const hit = String(e.value).toLowerCase() === t;
+      if (hit) {
+        gone.push({ facet: e.facet, value: e.value, wasRefusal: true });
+        const w = u.bannedWords.indexOf(e.said);
+        if (w >= 0) u.bannedWords.splice(w, 1);
+      }
+      return !hit;
+    });
+    S.answers = (S.answers || []).filter(ans => {
+      const hit = ans.facet === t || ans.values.some(v => String(v).toLowerCase() === t);
+      if (hit) {
+        gone.push({ facet: ans.facet, value: ans.values.join(" / ") });
+        S.asked = S.asked.filter(f => f !== ans.facet);
+      }
+      return !hit;
+    });
+    if ((t === "budget" || t === "price") && u.budget) {
+      gone.push({ facet: "budget", value: E.budgetLabel(u.budget) });
+      u.budget = null;
+    }
+    const term = u.terms.indexOf(t);
+    if (term >= 0) { gone.push({ facet: "word", value: t }); u.terms.splice(term, 1); }
+    return gone;
+  }
+
+  function findValue(text) {
+    const t = String(text).toLowerCase().trim();
+    const voc = E.attributeVocabulary();
+    for (const f of E.FACETS) {
+      for (const o of voc[f]) if (o.value.toLowerCase() === t) return { facet: f, value: o.value };
+    }
+    return null;
+  }
+
+  function reset() {
+    S.understood = null; S.asked = []; S.answers = []; S.waived = [];
+    S.pendingFacet = null; S.result = null; S.curated = null;
+    $("#q").value = "";
+    syncTools();
+    render();
+    return { status: "reset", cart_kept: S.cart.length };
+  }
+
+  /* ---------- tools ------------------------------------------------------ */
+
+  let answerController = null;
+  const baseController = new AbortController();
+
+  // Registration that survives the spec's edges: a native implementation may
+  // throw on a duplicate name, may honour the AbortSignal, or may only expose
+  // unregisterTool. Do the safe thing under all three.
+  function safeRegister(def, controller) {
+    try {
+      const r = mc.registerTool(def, { signal: controller.signal });
+      if (r && typeof r.catch === "function") r.catch(() => {});
+    } catch (err) {
+      if (typeof mc.unregisterTool === "function") {
+        try { mc.unregisterTool(def.name); } catch (e) { /* not registered */ }
+        try { mc.registerTool(def, { signal: controller.signal }); }
+        catch (e2) { console.warn("registerTool failed for " + def.name, e2); }
+      } else {
+        console.warn("registerTool failed for " + def.name, err);
+      }
+    }
+  }
+  function safeUnregister(name, controller) {
+    controller.abort();   // the spec's own way to remove a tool
+    if (typeof mc.unregisterTool === "function") {
+      try { mc.unregisterTool(name); } catch (e) { /* already gone via the signal */ }
+    }
+  }
+
+  function syncTools() {
+    const open = !!S.pendingFacet;
+    if (open && !answerController) {
+      answerController = new AbortController();
+      safeRegister({
+        name: "answer_question",
+        title: "Answer the store's question",
+        description: "Answer the question the store just asked. Pass one or more option " +
+          "values, or no_preference — which is remembered and never asked about again.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            values: { type: "array", items: { type: "string" },
+              description: "Option values, or the single value no_preference." }
+          },
+          required: ["values"]
+        },
+        execute: async (input) => {
+          const out = doAnswer(input.values);
+          logCall("answer_question", input, out);
+          return wrap(out);
+        }
+      }, answerController);
+    } else if (!open && answerController) {
+      safeUnregister("answer_question", answerController);
+      answerController = null;
+    }
+    renderTools();
+  }
+
+  function registerAll() {
+    const t = (def) => safeRegister(def, baseController);
+
+    t({
+      name: "search_products",
+      title: "Search the store",
+      description: "Search this menswear catalog. Pass the shopper's request in their own " +
+        "words — refusals, budget and all. Returns products, or a question when answering " +
+        "would be a guess. Anything you already know can be passed structured and will " +
+        "override the parse.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The shopper's request, verbatim." },
+          attributes: { type: "array", items: { type: "object" },
+            description: "Known requirements as {facet, value}." },
+          exclusions: { type: "array", items: { type: "object" },
+            description: "Known refusals as {facet, value}." },
+          budget: { type: "object", description: "{min, max} in dollars." },
+          no_preference: { type: "array", items: { type: "string" },
+            description: "Facets the shopper has said they do not mind." }
+        },
+        required: ["query"]
+      },
+      execute: async (input) => {
+        const out = doSearch(input.query, input);
+        logCall("search_products", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "refine_search",
+      title: "Add one requirement or one refusal",
+      description: "Narrow the current search by one attribute value, or rule one out.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          require: { type: "string", description: "An attribute value to require." },
+          refuse: { type: "string", description: "An attribute value or word to rule out." }
+        }
+      },
+      execute: async (input) => {
+        const out = doRefine(input);
+        logCall("refine_search", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "revise_search",
+      title: "Take something back",
+      description: "The shopper changed their mind. Drop one thing they had said — an " +
+        "attribute value, a refusal, an answer, a facet name, or \"budget\" — and keep " +
+        "the rest. Pass drop_all to start the request over; the cart is kept. The store " +
+        "reports what it dropped so you can tell the shopper it heard them.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          drop: { type: "array", items: { type: "string" },
+            description: "Values, facet names, or \"budget\" to take back." },
+          drop_all: { type: "boolean", description: "Take the whole request back." }
+        }
+      },
+      execute: async (input) => {
+        const out = doRefine({ drop: input.drop, drop_all: input.drop_all });
+        logCall("revise_search", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "list_attributes",
+      title: "The vocabulary this catalog carries",
+      description: "Every attribute value in the catalog, with how many products record it.",
+      inputSchema: { type: "object", properties: {} },
+      annotations: { readOnlyHint: true },
+      execute: async () => {
+        const out = { catalog_size: E.CATALOG.length, attributes: E.attributeVocabulary() };
+        logCall("list_attributes", {}, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "show_products",
+      title: "Put your own picks in the grid",
+      description: "Replace the grid with the ids you picked, in your order.",
+      inputSchema: {
+        type: "object",
+        properties: { ids: { type: "array", items: { type: "string" } } },
+        required: ["ids"]
+      },
+      execute: async (input) => {
+        S.curated = (input.ids || []).map(E.byId).filter(Boolean);
+        render();
+        const out = { status: "showing", count: S.curated.length };
+        logCall("show_products", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "explain_ranking",
+      title: "Why this product is where it is",
+      description: "Which words matched, whether the whole request matched, and the demand signal.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"]
+      },
+      annotations: { readOnlyHint: true },
+      execute: async (input) => {
+        const p = E.byId(input.id);
+        if (!p) return wrap({ error: "No such product." });
+        const u = S.understood || { terms: [], attributes: [], exclusions: [] };
+        const out = {
+          id: p.id, title: p.title,
+          matched_words: u.terms.filter(t => p.title.toLowerCase().includes(t)),
+          matched_attributes: u.attributes.filter(a => (p.attrs[a.facet] || []).includes(a.value))
+            .map(a => a.facet + " = " + a.value),
+          unrecorded_attributes: u.attributes.filter(a => !p.attrs[a.facet])
+            .map(a => a.facet + " (not recorded — kept, ranked after)"),
+          demand: { reviews: p.reviews, rating: p.rating,
+            note: "Demand is proxied by log-scaled review volume; a frozen catalog has no click log." },
+          price: p.price == null ? "not listed" : "$" + p.price,
+          questions_asked: S.asked, question_budget_left: Math.max(0, 3 - S.asked.length)
+        };
+        logCall("explain_ranking", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "add_to_cart",
+      title: "Add to cart",
+      description: "Add a product to the cart by id.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" }, quantity: { type: "number" } },
+        required: ["id"]
+      },
+      execute: async (input) => {
+        const p = E.byId(input.id);
+        if (!p) return wrap({ error: "No such product." });
+        const qty = Math.max(1, Math.round(input.quantity || 1));
+        const line = S.cart.find(l => l.id === p.id);
+        if (line) line.qty += qty; else S.cart.push({ id: p.id, qty });
+        renderCart();
+        const out = cartView();
+        logCall("add_to_cart", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "remove_from_cart",
+      title: "Remove from cart",
+      description: "Remove a product from the cart by id.",
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      execute: async (input) => {
+        S.cart = S.cart.filter(l => l.id !== input.id);
+        renderCart();
+        const out = cartView();
+        logCall("remove_from_cart", input, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "view_cart",
+      title: "See the cart",
+      description: "The cart, with line totals.",
+      inputSchema: { type: "object", properties: {} },
+      annotations: { readOnlyHint: true },
+      execute: async () => {
+        const out = cartView();
+        logCall("view_cart", {}, out);
+        return wrap(out);
+      }
+    });
+
+    t({
+      name: "reset_search",
+      title: "Start the search over",
+      description: "Clear the search, including the question budget. The cart is kept.",
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => {
+        const out = reset();
+        logCall("reset_search", {}, out);
+        return wrap(out);
+      }
+    });
+  }
+
+  function cartView() {
+    const lines = S.cart.map(l => {
+      const p = E.byId(l.id);
+      return { id: p.id, title: p.title, quantity: l.qty,
+        unit_price: p.price, line_total: p.price == null ? null : +(p.price * l.qty).toFixed(2) };
+    });
+    const total = lines.reduce((a, l) => a + (l.line_total || 0), 0);
+    return { lines, total: +total.toFixed(2),
+      unpriced: lines.filter(l => l.unit_price == null).length };
+  }
+
+  /* ---------- rendering -------------------------------------------------- */
+
+  function render() {
+    renderUnderstood();
+    renderQuestion();
+    renderWhy();
+    renderGrid();
+    renderCart();
+    renderTools();
+  }
+
+  function chip(text, kind) {
+    const c = el("span", "chip " + (kind || ""), text);
+    return c;
+  }
+
+  function renderUnderstood() {
+    const box = $("#understood");
+    box.innerHTML = "";
+    const u = S.understood;
+    if (!u) { box.hidden = true; return; }
+    box.hidden = false;
+
+    const add = (t, k) => box.appendChild(chip(t, k));
+    if (u.retraction) {
+      add(u.retraction.kind === "reset"
+        ? "starting over"
+        : "following the change", "changed");
+    }
+    for (const s of u.superseded || []) add(s.value, "dropped");
+    for (const a of u.attributes) add(a.value, "want");
+    for (const ans of S.answers) add(ans.values.join(" or "), "want");
+    for (const e of u.exclusions) add("not " + e.value, "refuse");
+    if (u.budget) add(E.budgetLabel(u.budget), "budget");
+    if (u.sort) add({ "price-asc": "cheapest first", "price-desc": "priciest first",
+      rating: "best rated first", demand: "most popular first" }[u.sort], "sort");
+    for (const w of S.waived) add(E.FACET_LABEL[w] + ": no preference", "waived");
+    for (const c of u.conflicts) add("said both ways: " + c, "conflict");
+    if (u.ignored.length) {
+      const ig = Array.from(new Set(u.ignored)).slice(0, 4);
+      add("ignored: " + ig.join(", "), "ignored");
+    }
+    if (!box.children.length) add("read as a plain keyword search", "ignored");
+  }
+
+  function renderQuestion() {
+    const box = $("#question");
+    box.innerHTML = "";
+    const r = S.result;
+    if (!r || r.status !== "need_more_evidence") { box.hidden = true; return; }
+    box.hidden = false;
+
+    box.appendChild(el("p", "ask", r.question));
+    const opts = el("div", "options");
+    for (const o of r.options.slice(0, 6)) {
+      const b = el("button", "opt");
+      b.appendChild(el("span", "opt-value", o.value));
+      b.appendChild(el("span", "opt-count", o.count + " left"));
+      b.addEventListener("click", () => doAnswer([o.value]));
+      // hovering shows what this answer would clear — the point of the question
+      b.addEventListener("mouseenter", () => previewOption(r.facet, o.value));
+      b.addEventListener("focus", () => previewOption(r.facet, o.value));
+      b.addEventListener("mouseleave", clearPreview);
+      b.addEventListener("blur", clearPreview);
+      opts.appendChild(b);
+    }
+    const none = el("button", "opt none", "no preference");
+    none.addEventListener("click", () => doAnswer(["no_preference"]));
+    opts.appendChild(none);
+    box.appendChild(opts);
+    box.appendChild(el("p", "note", r.note));
+  }
+
+  function previewOption(facet, value) {
+    const grid = $("#grid");
+    let kept = 0;
+    for (const card of grid.children) {
+      const p = E.byId(card.dataset.id);
+      const survives = !p.attrs[facet] || (p.attrs[facet] || []).includes(value);
+      card.classList.toggle("culled", !survives);
+      if (survives) kept++;
+    }
+    $("#preview").textContent = "answering \u201c" + value + "\u201d leaves " + kept +
+      " of these " + grid.children.length;
+    $("#preview").hidden = false;
+  }
+
+  function clearPreview() {
+    for (const card of $("#grid").children) card.classList.remove("culled");
+    $("#preview").hidden = true;
+  }
+
+  function renderWhy() {
+    const box = $("#why");
+    box.innerHTML = "";
+    const r = S.result;
+    if (!r) { box.hidden = true; return; }
+    box.hidden = false;
+    for (const line of r.why) box.appendChild(el("li", null, line));
+
+    if (r.differentiators && r.differentiators.length) {
+      const d = r.differentiators[0];
+      box.appendChild(el("li", "differ", "What still separates them: " +
+        d.splits.map(s => s.count + " " + s.value).join(", ") + "."));
+    }
+    if (r.relax && r.relax.length) {
+      const li = el("li", "relax");
+      li.appendChild(document.createTextNode("Lift one requirement: "));
+      for (const opt of r.relax) {
+        const b = el("button", "lift", opt.label + " \u2192 " + opt.count);
+        b.addEventListener("click", () => liftConstraint(opt));
+        li.appendChild(b);
+      }
+      box.appendChild(li);
+    }
+  }
+
+  function liftConstraint(opt) {
+    const u = S.understood;
+    if (opt.kind === "attribute") u.attributes.splice(opt.index, 1);
+    if (opt.kind === "exclusion") {
+      const dropped = u.exclusions.splice(opt.index, 1)[0];
+      const w = u.bannedWords.indexOf(dropped.said);
+      if (w >= 0) u.bannedWords.splice(w, 1);
+    }
+    if (opt.kind === "budget") u.budget = null;
+    if (opt.kind === "term") u.terms.splice(opt.index, 1);
+    if (opt.kind === "answer") S.answers.splice(opt.index, 1);
+    const res = E.finish({ understood: u, asked: S.asked, answers: S.answers, waived: S.waived });
+    S.curated = null;
+    adopt(res);
+    render();
+  }
+
+  function renderGrid() {
+    const grid = $("#grid");
+    grid.innerHTML = "";
+    const r = S.result;
+    const count = $("#count");
+    if (!r) {
+      count.textContent = "";
+      $("#empty").hidden = false;
+      return;
+    }
+    $("#empty").hidden = true;
+    const list = S.curated || r.products;
+    count.textContent = S.curated
+      ? S.curated.length + " picked by the agent"
+      : r.candidates + (r.candidates === 1 ? " candidate" : " candidates") +
+        (r.candidates > list.length ? ", showing " + list.length : "");
+
+    for (const p of list) {
+      const card = el("article", "card");
+      card.dataset.id = p.id;
+      card.appendChild(el("h3", null, p.title));
+      const meta = el("p", "meta");
+      const bits = [];
+      for (const f of E.FACETS) if (p.attrs[f]) bits.push(p.attrs[f].join(", "));
+      meta.textContent = bits.join(" \u00b7 ") || "no attributes recorded";
+      card.appendChild(meta);
+      const foot = el("p", "foot");
+      foot.appendChild(el("span", "price", p.price == null ? "price not listed" : "$" + p.price));
+      foot.appendChild(el("span", "rev", p.rating + " from " + p.reviews.toLocaleString() + " reviews"));
+      card.appendChild(foot);
+      const add = el("button", "add", "Add to cart");
+      add.addEventListener("click", async () => {
+        const line = S.cart.find(l => l.id === p.id);
+        if (line) line.qty++; else S.cart.push({ id: p.id, qty: 1 });
+        renderCart();
+        logCall("add_to_cart", { id: p.id }, cartView());
+      });
+      card.appendChild(add);
+      grid.appendChild(card);
+    }
+  }
+
+  function renderCart() {
+    const v = cartView();
+    $("#cart-count").textContent = v.lines.reduce((a, l) => a + l.quantity, 0);
+    $("#cart-total").textContent = "$" + v.total.toFixed(2);
+    const list = $("#cart-lines");
+    list.innerHTML = "";
+    for (const l of v.lines) {
+      const li = el("li");
+      li.appendChild(el("span", "cl-title", l.title));
+      li.appendChild(el("span", "cl-price",
+        l.line_total == null ? "not listed" : "$" + l.line_total.toFixed(2)));
+      const x = el("button", "cl-x", "Remove");
+      x.addEventListener("click", () => {
+        S.cart = S.cart.filter(c => c.id !== l.id);
+        renderCart();
+      });
+      li.appendChild(x);
+      list.appendChild(li);
+    }
+    $("#checkout-total").value = v.total.toFixed(2);
+  }
+
+  function renderTools() {
+    const box = $("#tools");
+    box.innerHTML = "";
+    for (const t of mc.getTools()) {
+      const li = el("li", t.name === "answer_question" ? "tool live" : "tool");
+      li.appendChild(el("span", "tname", t.name));
+      if (t.annotations && t.annotations.readOnlyHint) li.appendChild(el("span", "ro", "read-only"));
+      box.appendChild(li);
+    }
+    $("#tool-note").textContent = S.pendingFacet
+      ? "answer_question is registered because a question is open."
+      : "answer_question is not registered — nothing is waiting on the shopper.";
+  }
+
+  function renderLog() {
+    const box = $("#log");
+    box.innerHTML = "";
+    for (const c of S.log) {
+      const li = el("li");
+      li.appendChild(el("span", "lname", c.name));
+      const arg = JSON.stringify(c.input);
+      li.appendChild(el("span", "largs", arg.length > 64 ? arg.slice(0, 61) + "\u2026" : arg));
+      if (c.status) li.appendChild(el("span", "lstatus " + c.status, c.status));
+      box.appendChild(li);
+    }
+  }
+
+  /* ---------- the scripted agent ---------------------------------------- */
+
+  const SCRIPT = [
+    { who: "shopper", text: "I need a wallet that is not leather, under $30." },
+    { who: "agent", text: "Let me ask the store.", act: () =>
+        mc.callTool("search_products", { query: "a wallet that is not leather, under $30" }) },
+    { who: "store", text: null, read: (r) => r.status === "need_more_evidence"
+        ? "The store asks back: " + r.question
+        : "The store answered with " + r.candidates + " candidates." },
+    { who: "agent", text: "It won't guess. Passing the question on." },
+    { who: "shopper", text: "Nylon is fine." },
+    { who: "agent", text: "answer_question appeared in the tool list — using it.",
+      act: () => mc.callTool("answer_question", { values: ["nylon"] }) },
+    { who: "shopper", text: "Actually, forget the budget — I'd rather have a good one." },
+    { who: "agent", text: "Taking the budget back and keeping the rest.",
+      act: () => mc.callTool("revise_search", { drop: ["budget"] }) },
+    { who: "store", text: null, read: (r) => r.dropped && r.dropped.length
+        ? "Dropped " + r.dropped.map(d => d.value).join(", ") +
+          " — " + r.candidates + " candidates now, nylon still held."
+        : "Nothing to drop." },
+    { who: "agent", text: "Why is the first one first?",
+      act: () => {
+        const first = (S.curated || S.result.products)[0];
+        return first ? mc.callTool("explain_ranking", { id: first.id }) : null;
+      } },
+    { who: "agent", text: "Showing the three best rated of those.",
+      act: () => {
+        const top = (S.result.products || []).slice()
+          .sort((a, b) => b.rating - a.rating).slice(0, 3).map(p => p.id);
+        return mc.callTool("show_products", { ids: top });
+      } },
+    { who: "agent", text: "Adding the first to the cart.",
+      act: () => {
+        const first = (S.curated || [])[0];
+        return first ? mc.callTool("add_to_cart", { id: first.id }) : null;
+      } },
+    { who: "agent", text: "Checkout is filled in. The last press is yours \u2014 I don't have it." }
+  ];
+
+  async function runScript() {
+    const panel = $("#agent");
+    panel.hidden = false;
+    $("#agent-lines").innerHTML = "";
+    for (const step of SCRIPT) {
+      let out = null;
+      if (step.act) out = await step.act();
+      const text = step.read
+        ? step.read(out && out.structuredContent ? out.structuredContent : S.result)
+        : step.text;
+      if (text) {
+        const li = el("li", "line " + step.who);
+        li.appendChild(el("span", "who", step.who));
+        li.appendChild(el("span", "said", text));
+        $("#agent-lines").appendChild(li);
+        $("#agent-lines").scrollTop = $("#agent-lines").scrollHeight;
+      }
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  }
+
+  /* ---------- wiring ----------------------------------------------------- */
+
+  let booted = false;
+  function init() {
+    if (booted) return;   // DOMContentLoaded fires once; a duplicate include must not register twice
+    booted = true;
+    registerAll();
+    syncTools();
+
+    $("#badge").textContent = live ? "WebMCP live in this browser" : "no WebMCP here — stand-in in use";
+    $("#badge").className = live ? "badge live" : "badge stub";
+    $("#catalog-size").textContent = E.CATALOG.length.toLocaleString();
+
+    $("#search").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const q = $("#q").value.trim();
+      if (q) { const out = doSearch(q); logCall("search_products", { query: q }, out); }
+    });
+
+    for (const b of document.querySelectorAll("[data-example]")) {
+      b.addEventListener("click", () => {
+        const q = b.dataset.example;
+        const out = doSearch(q);
+        logCall("search_products", { query: q }, out);
+      });
+    }
+
+    $("#reset").addEventListener("click", () => { reset(); logCall("reset_search", {}, { status: "reset" }); });
+    $("#run-agent").addEventListener("click", runScript);
+
+    $("#checkout").addEventListener("submit", (e) => {
+      e.preventDefault();
+      $("#placed").hidden = false;
+      $("#placed").textContent = "Order placed. Nothing left the page \u2014 this is a demo.";
+    });
+
+    if (mc.addEventListener) mc.addEventListener("toolchange", renderTools);
+    render();
+
+    if (new URLSearchParams(location.search).get("agent") === "demo") setTimeout(runScript, 600);
+  }
+
+  document.addEventListener("DOMContentLoaded", init);
+})();
+
+</script>
+</body>
+</html>
