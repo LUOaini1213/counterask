@@ -1,0 +1,8 @@
+[build]
+  command = "node scripts/build.mjs"
+  publish = "public"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
