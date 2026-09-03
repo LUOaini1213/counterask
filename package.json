@@ -2,16 +2,28 @@
   "name": "counterask",
   "version": "1.0.0",
   "private": true,
-  "type": "module",
   "description": "A menswear storefront whose WebMCP tools return a question when answering would be a guess.",
   "license": "MIT",
   "scripts": {
-    "start": "python -m http.server 5173 --directory public",
-    "test": "node scripts/parse_test.mjs && node scripts/tools_test.mjs && node scripts/bench.mjs 400 && node scripts/agentbench.mjs 400 --holdout",
-    "bench": "node scripts/bench.mjs 800 && node scripts/agentbench.mjs 800 && node scripts/agentbench.mjs 800 --holdout",
-    "smoke": "node scripts/smoke.mjs"
+    "start": "python3 -m http.server 5173 --directory public",
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/parse_test.mjs && node scripts/fuzz.mjs && node scripts/tools_test.mjs && node scripts/native_test.mjs && node scripts/persist_test.mjs && node scripts/uitest.mjs && npm run build && node scripts/singletest.mjs && node scripts/bench.mjs && node scripts/bench.mjs --holdout",
+    "bench": "node scripts/bench.mjs",
+    "eval": "node scripts/eval.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "weights": "node scripts/weights.mjs",
+    "askvalue": "node scripts/askvalue.mjs",
+    "fuzz": "node scripts/fuzz.mjs",
+    "lookahead": "node scripts/lookahead.mjs",
+    "sequential": "node scripts/sequential.mjs",
+    "frontier": "node scripts/frontier.mjs",
+    "patience": "node scripts/patience.mjs",
+    "catalog:synthetic": "node scripts/catalog_synthetic.mjs",
+    "catalog:real": "node scripts/catalog_real.mjs",
+    "shards": "node scripts/shards.mjs",
+    "broad": "node scripts/broad.mjs"
   },
-  "engines": {
-    "node": ">=20"
+  "devDependencies": {
+    "jsdom": "^26.0.0"
   }
 }
