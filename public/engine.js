@@ -332,7 +332,6 @@ export function parseRequest(text, catalog) {
     const lead = tail.length - tail.trimStart().length;
     const ext = tail.trimStart().split(' ').slice(0, 7).join(' ');
     const first = ext.split(' ')[0] ?? '';
-    if (cue[0] === 'no' && NO_FEATURE.has(first)) continue;  // no iron shirt
     const limit = cue[0] === 'no' ? 2 : 5;
     const stop = ext.search(/[,.;!?—–]|\s-\s|\s(?:and|(?<!anything\s)but)\s|\s(?:not|no|nothing|without|except|excepting|excluding|avoid|avoiding|never|minus|sans|skip|leave|anything|other|rather|instead|don't|dont|doesn't|doesnt|shouldn't|shouldnt|can't|cant|cannot|mustn't|isn't|aren't|isnt|arent|wouldn't|wouldnt)\s/);
     let win = (stop === -1 ? ext : ext.slice(0, stop)).split(' ').slice(0, limit).join(' ');
@@ -341,6 +340,10 @@ export function parseRequest(text, catalog) {
 
     const hits = findForms(ext, catalog.facetValues, catalog.facetForms, ALSO)
       .filter((h) => h.at < win.length);
+    // "no iron", "no slip" name a feature — unless the words are a value the
+    // catalogue knows: "no slip on" refuses slip-ons. The fuzzer found the
+    // collision once the rebuilt index had a slip-on value.
+    if (cue[0] === 'no' && NO_FEATURE.has(first) && !hits.length) continue;
     let rest = win;
     for (const h of hits) {
       const end = Math.min(h.end, rest.length);
