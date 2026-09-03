@@ -145,6 +145,13 @@ running in the tab — no server, no model call, no tokens:
 Results are MCP-shaped on the wire (`content` text plus `structuredContent`),
 so a client following either convention reads the same thing.
 
+Verified on Chrome 152 with `chrome://flags/#enable-webmcp-testing`, through
+`document.modelContext` itself: all tools register with titles and
+`readOnlyHint`, the declarative checkout form is picked up as a tool, a search
+returns the question and `answer_question` appears (and leaves after it is
+answered), and `executeTool` on the checkout form fills the fields, focuses
+*Place order* and waits for the person — nothing is submitted.
+
 Behind them: a sentence parser (budget, ordering, refusals at both the
 recorded-attribute and title-word level, stated attributes, filler); BM25
 retrieval over 9,901 real products with length normalisation and a

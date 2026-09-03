@@ -165,6 +165,29 @@ conversation can be passed structured — attributes, exclusions, budget, facets
 the shopper said they do not mind — and structured input overrides the parse.
 The store never asks about anything it has been told.
 
+## Verified on a real WebMCP browser
+
+Run on Chrome 152 (Chrome for Testing) with `chrome://flags/#enable-webmcp-testing`,
+driving the live site through `document.modelContext` itself:
+
+- All eleven imperative tools appear in `getTools()` with their titles and
+  `readOnlyHint`; the declarative `<form toolname="checkout">` appears as a
+  twelfth tool, its schema derived from the form's fields.
+- `search_products` returns the question; `answer_question` then appears in
+  the list, `toolchange` fires and the page's *on offer now* line updates —
+  natively, not through the stand-in.
+- Calling `answer_question` closes the question and the tool leaves the list
+  a moment later. (The first native run rejected that call: aborting a tool's
+  registration while the browser was still delivering its own result fails
+  with an "unknown transient reason", so a closed question now keeps its tool
+  for 1.5 s.)
+- `executeTool` on the `checkout` form fills in the name and address, focuses
+  *Place order*, and stays pending until a person presses it. Nothing was
+  submitted.
+- One implementation detail worth knowing: Chrome 152's `executeTool` takes
+  its input as a JSON *string* and exposes `inputSchema` as one; tools still
+  receive a parsed object.
+
 ## The tools
 
 | Tool | What it does |
