@@ -1,3 +1,5 @@
+> **Moved.** The live store and the current code are in [counterask-webmcp](https://github.com/LUOaini1213/counterask-webmcp) ([demo](https://luoaini1213.github.io/counterask-webmcp/)). This repository is the earlier sibling and is archived. The `cuizi-rewrite` branch stays here as a record.
+
 # Counterask — a store that asks back
 
 A menswear storefront whose WebMCP tools return **a question** when answering
